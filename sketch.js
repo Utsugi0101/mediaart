@@ -17,6 +17,10 @@ const TWINKLE_SPEED = 0.035;
 const PULSE_SPEED = 0.012;
 const STABLE_THRESHOLD = 0.5;
 const PALETTE_STEPS = 32;
+const VIRTUAL_FOOD_COUNT = 2;
+const EXPLORER_INTERVAL = 75;
+const MAX_GROWING_BRANCHES = 10;
+const METABOLISM_SAMPLES = 360;
 
 let gridWidth;
 let gridHeight;
@@ -36,6 +40,11 @@ let generationSeed = 0;
 let isPaused = false;
 let maxDynamicCells = 0;
 let growthSpeedMultiplier = 1;
+let virtualFoods;
+let organismCenterX = 0;
+let organismCenterY = 0;
+let protectedCoreRadius = 0;
+let targetCellCount = 0;
 
 function setup() {
   pixelDensity(1);
@@ -69,7 +78,12 @@ function setupSpeedControls() {
 function draw() {
   if (!isPaused) {
     simulationFrame += 1;
+    updateVirtualFoods();
     growBranchTips();
+
+    if (simulationFrame % EXPLORER_INTERVAL === 0) {
+      spawnExploratoryBranch();
+    }
 
     if (simulationFrame % UPDATE_INTERVAL === 0) {
       updateLivingEdge();
@@ -111,10 +125,16 @@ function regenerate() {
   const centerY = gridHeight * 0.5 + random(-gridHeight * 0.025, gridHeight * 0.025);
   const coreScale = Math.min(gridWidth, gridHeight) * 0.1;
 
+  organismCenterX = centerX;
+  organismCenterY = centerY;
+  protectedCoreRadius = coreScale * 0.48;
+  initializeVirtualFoods();
+
   generateCentralMass(centerX, centerY, coreScale);
   generateMainBranches(centerX, centerY, coreScale);
   generateNetworkConnections();
   scatterParticles(centerX, centerY, coreScale);
+  targetCellCount = Math.max(1, Math.floor(activeCells.size * 1.22));
 
   if (isPaused) {
     redraw();
@@ -136,6 +156,8 @@ function initializeGrid() {
   activeList = [];
   dynamicCells = new Set();
   branches = [];
+  virtualFoods = [];
+  targetCellCount = 0;
   maxDynamicCells = Math.max(500, Math.floor(cellCount * 0.014));
 
   cellImage = createImage(gridWidth, gridHeight);
@@ -403,6 +425,142 @@ function scatterParticles(centerX, centerY, coreScale) {
   }
 }
 
+// 通常時の探索先。将来はここをユーザーが置く餌へ置き換える
+function initializeVirtualFoods() {
+  virtualFoods = [];
+
+  for (let i = 0; i < VIRTUAL_FOOD_COUNT; i += 1) {
+    virtualFoods.push({
+      noiseX: random(1000),
+      noiseY: random(1000),
+      speed: random(0.00042, 0.00072),
+      x: organismCenterX,
+      y: organismCenterY,
+    });
+  }
+
+  updateVirtualFoods();
+}
+
+function updateVirtualFoods() {
+  const marginX = gridWidth * 0.1;
+  const marginY = gridHeight * 0.12;
+
+  for (const food of virtualFoods) {
+    const time = simulationFrame * food.speed;
+    food.x = lerp(marginX, gridWidth - marginX, noise(food.noiseX + time, food.noiseY));
+    food.y = lerp(marginY, gridHeight - marginY, noise(food.noiseX, food.noiseY + time));
+  }
+}
+
+function spawnExploratoryBranch() {
+  if (activeCells.size === 0 || activeCells.size >= targetCellCount * 1.22) {
+    return;
+  }
+
+  let growingBranchCount = 0;
+  for (const branch of branches) {
+    if (branch.drawn < branch.path.length) {
+      growingBranchCount += 1;
+    }
+  }
+  if (growingBranchCount >= MAX_GROWING_BRANCHES) {
+    return;
+  }
+
+  const target = virtualFoods[Math.floor(random(virtualFoods.length))];
+  const originIndex = findExplorationOrigin(target);
+  if (originIndex < 0) {
+    return;
+  }
+
+  const branch = createForagingBranch(originIndex, target);
+  if (branch.path.length > 0) {
+    branches.push(branch);
+  }
+}
+
+function findExplorationOrigin(target) {
+  const shortestSide = Math.min(gridWidth, gridHeight);
+  let bestIndex = -1;
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  for (let attempt = 0; attempt < 72; attempt += 1) {
+    const index = getRandomActiveIndex();
+    if (index < 0) {
+      continue;
+    }
+
+    const x = index % gridWidth;
+    const y = Math.floor(index / gridWidth);
+    const neighbors = countLivingNeighbors(x, y);
+    if (neighbors > 6) {
+      continue;
+    }
+
+    const distanceToFood = Math.hypot(target.x - x, target.y - y);
+    const score = -distanceToFood - neighbors * shortestSide * 0.018 + random(-8, 8);
+    if (score > bestScore) {
+      bestScore = score;
+      bestIndex = index;
+    }
+  }
+
+  return bestIndex >= 0 ? bestIndex : getRandomActiveIndex();
+}
+
+function createForagingBranch(originIndex, target) {
+  const shortestSide = Math.min(gridWidth, gridHeight);
+  const pathLength = Math.floor(shortestSide * random(0.075, 0.16));
+  let x = originIndex % gridWidth;
+  let y = Math.floor(originIndex / gridWidth);
+  let heading = Math.atan2(target.y - y, target.x - x) + random(-0.5, 0.5);
+  const noiseOffset = random(2000);
+  const waveOffset = random(TWO_PI);
+  const path = [];
+  let lastX = Math.round(x);
+  let lastY = Math.round(y);
+
+  for (let step = 0; step < pathLength; step += 1) {
+    const progress = step / Math.max(1, pathLength - 1);
+    const foodHeading = Math.atan2(target.y - y, target.x - x);
+    const wander = (noise(noiseOffset + step * 0.055, simulationFrame * 0.0008) - 0.5) * 1.7;
+    const wave = Math.sin(step * 0.13 + waveOffset) * 0.16;
+    heading = lerpAngle(heading, foodHeading + wander + wave, 0.085);
+    heading += random(-0.045, 0.045);
+
+    x += Math.cos(heading) * random(0.82, 1.2);
+    y += Math.sin(heading) * random(0.82, 1.2);
+    if (x < 4 || y < 4 || x >= gridWidth - 4 || y >= gridHeight - 4) {
+      break;
+    }
+
+    const pointX = Math.round(x);
+    const pointY = Math.round(y);
+    if (pointX === lastX && pointY === lastY) {
+      continue;
+    }
+
+    path.push({
+      x: pointX,
+      y: pointY,
+      radius: Math.max(0.52, lerp(1.45, 0.58, progress) + random(-0.15, 0.18)),
+      brightness: clamp(lerp(0.58, 0.25, progress) + random(-0.06, 0.06), 0.2, 0.64),
+      permanence: lerp(0.58, 0.22, progress),
+    });
+
+    lastX = pointX;
+    lastY = pointY;
+  }
+
+  return {
+    path,
+    drawn: 0,
+    growthBudget: random(),
+    growthRate: random(0.78, 1.24),
+  };
+}
+
 function growBranchTips() {
   for (const branch of branches) {
     if (branch.drawn >= branch.path.length) {
@@ -421,12 +579,16 @@ function growBranchTips() {
 // 外縁だけを低頻度で増殖・消滅させる
 function updateLivingEdge() {
   ageDynamicCells();
+  erodePersistentCells();
 
   if (dynamicCells.size >= maxDynamicCells || activeList.length === 0) {
     return;
   }
 
   const populationPressure = 1 - dynamicCells.size / maxDynamicCells;
+  const massPressure = targetCellCount > 0
+    ? clamp((targetCellCount * 1.18 - activeCells.size) / (targetCellCount * 0.38), 0.04, 1)
+    : 1;
   for (let attempt = 0; attempt < BIRTH_ATTEMPTS; attempt += 1) {
     const sourceIndex = getRandomActiveIndex();
     if (sourceIndex < 0) {
@@ -453,7 +615,14 @@ function updateLivingEdge() {
     }
 
     const neighbors = countLivingNeighbors(targetX, targetY);
-    const birthChance = (neighbors >= 2 && neighbors <= 5 ? 0.3 : 0.09) * populationPressure;
+    const food = getNearestVirtualFood(sourceX, sourceY);
+    const sourceDistance = squaredDistance(sourceX, sourceY, food.x, food.y);
+    const targetDistance = squaredDistance(targetX, targetY, food.x, food.y);
+    const foodBias = targetDistance < sourceDistance ? 1.28 : 0.72;
+    const birthChance = (neighbors >= 2 && neighbors <= 5 ? 0.3 : 0.09)
+      * populationPressure
+      * massPressure
+      * foodBias;
     if (random() < birthChance) {
       addCell(
         targetX,
@@ -464,6 +633,65 @@ function updateLivingEdge() {
       );
     }
   }
+}
+
+function erodePersistentCells() {
+  if (targetCellCount <= 0 || activeCells.size <= targetCellCount * 0.72) {
+    return;
+  }
+
+  const populationRatio = activeCells.size / targetCellCount;
+  const erosionPressure = clamp((populationRatio - 0.72) / 0.5, 0.12, 1);
+
+  for (let attempt = 0; attempt < METABOLISM_SAMPLES; attempt += 1) {
+    const index = getRandomActiveIndex();
+    if (index < 0 || stability[index] < STABLE_THRESHOLD) {
+      continue;
+    }
+
+    const x = index % gridWidth;
+    const y = Math.floor(index / gridWidth);
+    if (Math.hypot(x - organismCenterX, y - organismCenterY) < protectedCoreRadius) {
+      continue;
+    }
+
+    const neighbors = countLivingNeighbors(x, y);
+    const erosionField = noise(x * 0.018 + 600, y * 0.018 + 600, simulationFrame * 0.00075);
+    const erosionChance = (neighbors <= 3 ? 0.58 : 0.2) * erosionPressure;
+    if (erosionField > 0.53 || random() >= erosionChance) {
+      continue;
+    }
+
+    stability[index] = Math.max(0, stability[index] - random(0.035, 0.07));
+    energy[index] *= random(0.9, 0.97);
+
+    if (stability[index] < STABLE_THRESHOLD) {
+      lifetime[index] = random(240, 620);
+      dynamicCells.add(index);
+    }
+  }
+}
+
+function getNearestVirtualFood(x, y) {
+  let nearest = virtualFoods[0];
+  let nearestDistance = squaredDistance(x, y, nearest.x, nearest.y);
+
+  for (let i = 1; i < virtualFoods.length; i += 1) {
+    const food = virtualFoods[i];
+    const distance = squaredDistance(x, y, food.x, food.y);
+    if (distance < nearestDistance) {
+      nearest = food;
+      nearestDistance = distance;
+    }
+  }
+
+  return nearest;
+}
+
+function squaredDistance(x1, y1, x2, y2) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  return dx * dx + dy * dy;
 }
 
 function ageDynamicCells() {
