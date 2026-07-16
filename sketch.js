@@ -461,7 +461,7 @@ function createFood(x, y) {
     id: nextFoodId++,
     x: clamp(x, 4, gridWidth - 4),
     y: clamp(y, 4, gridHeight - 4),
-    radius: Math.max(5, shortestSide * 0.015),
+    radius: Math.max(7, shortestSide * 0.02),
     orbitRadius: Math.max(18, shortestSide * 0.075),
     lastInteractionFrame: Number.NEGATIVE_INFINITY,
   };
@@ -837,6 +837,8 @@ function renderFoods() {
 
   push();
   noSmooth();
+  textAlign(CENTER, BOTTOM);
+  textSize(11);
   for (const food of foods) {
     const x = food.x * scaleX;
     const y = food.y * scaleY;
@@ -857,6 +859,9 @@ function renderFoods() {
     circle(x, y, markerRadius * 2);
     fill(...COLORS.foodCore, 255);
     circle(x, y, Math.max(3, markerRadius * 0.62));
+
+    fill(...COLORS.food, 235);
+    text("餌", x, y - markerRadius * 1.85);
   }
   pop();
 }
