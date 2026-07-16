@@ -26,6 +26,22 @@ body,
   place-items: center;
 }
 
+.interaction-hint {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  z-index: 10;
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid rgb(105 154 188 / 30%);
+  border-radius: 8px;
+  background: rgb(1 4 9 / 68%);
+  color: rgb(239 248 255 / 72%);
+  font: 12px/1 system-ui, sans-serif;
+  pointer-events: none;
+  backdrop-filter: blur(6px);
+}
+
 .speed-control {
   position: fixed;
   right: 16px;

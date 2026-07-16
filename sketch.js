@@ -7,6 +7,8 @@ const COLORS = {
   edge: [24, 52, 76],
   body: [105, 154, 188],
   core: [239, 248, 255],
+  food: [255, 188, 82],
+  foodCore: [255, 246, 204],
 };
 
 const TARGET_FPS = 30;
@@ -17,7 +19,7 @@ const TWINKLE_SPEED = 0.035;
 const PULSE_SPEED = 0.012;
 const STABLE_THRESHOLD = 0.5;
 const PALETTE_STEPS = 32;
-const VIRTUAL_FOOD_COUNT = 2;
+const INITIAL_FOOD_COUNT = 2;
 const EXPLORER_INTERVAL = 75;
 const MAX_GROWING_BRANCHES = 10;
 const METABOLISM_SAMPLES = 360;
@@ -40,10 +42,9 @@ let generationSeed = 0;
 let isPaused = false;
 let maxDynamicCells = 0;
 let growthSpeedMultiplier = 1;
-let virtualFoods;
-let organismCenterX = 0;
-let organismCenterY = 0;
-let protectedCoreRadius = 0;
+let foods;
+let draggedFood = null;
+let nextFoodId = 1;
 let targetCellCount = 0;
 
 function setup() {
@@ -78,7 +79,6 @@ function setupSpeedControls() {
 function draw() {
   if (!isPaused) {
     simulationFrame += 1;
-    updateVirtualFoods();
     growBranchTips();
 
     if (simulationFrame % EXPLORER_INTERVAL === 0) {
@@ -91,6 +91,7 @@ function draw() {
   }
 
   renderCells();
+  updateInteractionCursor();
 }
 
 // 画面内に収まる最大の16:9キャンバスを計算する
@@ -121,19 +122,25 @@ function regenerate() {
 
   initializeGrid();
 
-  const centerX = gridWidth * 0.5 + random(-gridWidth * 0.018, gridWidth * 0.018);
-  const centerY = gridHeight * 0.5 + random(-gridHeight * 0.025, gridHeight * 0.025);
   const coreScale = Math.min(gridWidth, gridHeight) * 0.1;
+  initializeFoods();
+  const branchesPerFood = Math.ceil(BRANCH_COUNT / INITIAL_FOOD_COUNT);
 
-  organismCenterX = centerX;
-  organismCenterY = centerY;
-  protectedCoreRadius = coreScale * 0.48;
-  initializeVirtualFoods();
+  for (let i = 0; i < foods.length; i += 1) {
+    const food = foods[i];
+    generateFoodHalo(food);
+    generateMainBranches(
+      food.x,
+      food.y,
+      food.orbitRadius * 1.45,
+      branchesPerFood,
+      i * 100,
+    );
+    scatterParticles(food.x, food.y, coreScale * 0.72);
+  }
 
-  generateCentralMass(centerX, centerY, coreScale);
-  generateMainBranches(centerX, centerY, coreScale);
   generateNetworkConnections();
-  scatterParticles(centerX, centerY, coreScale);
+  clearFoodInteriors();
   targetCellCount = Math.max(1, Math.floor(activeCells.size * 1.22));
 
   if (isPaused) {
@@ -156,7 +163,9 @@ function initializeGrid() {
   activeList = [];
   dynamicCells = new Set();
   branches = [];
-  virtualFoods = [];
+  foods = [];
+  draggedFood = null;
+  nextFoodId = 1;
   targetCellCount = 0;
   maxDynamicCells = Math.max(500, Math.floor(cellCount * 0.014));
 
@@ -164,33 +173,25 @@ function initializeGrid() {
   palette = buildPalette();
 }
 
-// 複数のずれた楕円を重ね、中心の密集領域を作る
-function generateCentralMass(centerX, centerY, coreScale) {
-  stampOrganicEllipse(
-    centerX,
-    centerY,
-    coreScale * 1.12,
-    coreScale * 0.88,
-    random(-0.35, 0.35),
-    Math.min(0.96, CORE_DENSITY + 0.1),
-    1,
-  );
+// 餌の周囲へ小さな塊を重ね、中心を持たない環状の初期形を作る
+function generateFoodHalo(food) {
+  const blobCount = 11;
 
-  const blobCount = 7;
   for (let i = 0; i < blobCount; i += 1) {
-    const angle = random(TWO_PI);
-    const offset = random(coreScale * 0.1, coreScale * 0.68);
-    const blobX = centerX + Math.cos(angle) * offset;
-    const blobY = centerY + Math.sin(angle) * offset * random(0.65, 1.1);
+    const angle = (TWO_PI * i) / blobCount + random(-0.24, 0.24);
+    const distance = food.orbitRadius * random(0.78, 1.16);
+    const blobScale = food.orbitRadius * random(0.24, 0.4);
+    const blobX = food.x + Math.cos(angle) * distance;
+    const blobY = food.y + Math.sin(angle) * distance;
 
     stampOrganicEllipse(
       blobX,
       blobY,
-      coreScale * random(0.48, 0.9),
-      coreScale * random(0.38, 0.76),
-      random(-0.9, 0.9),
-      CORE_DENSITY * random(0.85, 1.03),
-      random(0.76, 0.94),
+      blobScale * random(0.82, 1.18),
+      blobScale * random(0.58, 0.92),
+      angle + random(-0.8, 0.8),
+      CORE_DENSITY * random(0.78, 0.96),
+      random(0.72, 0.94),
     );
   }
 }
@@ -231,13 +232,13 @@ function stampOrganicEllipse(cx, cy, radiusX, radiusY, rotation, density, streng
   }
 }
 
-// 中心から蛇行するランダムウォークを放射状に伸ばす
-function generateMainBranches(centerX, centerY, coreScale) {
+// 餌の周囲から蛇行するランダムウォークを放射状に伸ばす
+function generateMainBranches(centerX, centerY, coreScale, branchCount, branchOffset) {
   const shortestSide = Math.min(gridWidth, gridHeight);
   const angleOffset = random(TWO_PI);
 
-  for (let i = 0; i < BRANCH_COUNT; i += 1) {
-    const baseAngle = angleOffset + (TWO_PI * i) / BRANCH_COUNT + random(-0.22, 0.22);
+  for (let i = 0; i < branchCount; i += 1) {
+    const baseAngle = angleOffset + (TWO_PI * i) / branchCount + random(-0.22, 0.22);
     const pathLength = Math.floor(shortestSide * random(0.18, 0.33));
     const branch = createBranchPath(
       centerX,
@@ -245,7 +246,7 @@ function generateMainBranches(centerX, centerY, coreScale) {
       coreScale,
       baseAngle,
       pathLength,
-      i,
+      branchOffset + i,
     );
 
     if (branch.path.length === 0) {
@@ -425,36 +426,59 @@ function scatterParticles(centerX, centerY, coreScale) {
   }
 }
 
-// 通常時の探索先。将来はここをユーザーが置く餌へ置き換える
-function initializeVirtualFoods() {
-  virtualFoods = [];
+function initializeFoods() {
+  foods = [];
 
-  for (let i = 0; i < VIRTUAL_FOOD_COUNT; i += 1) {
-    virtualFoods.push({
-      noiseX: random(1000),
-      noiseY: random(1000),
-      speed: random(0.00042, 0.00072),
-      x: organismCenterX,
-      y: organismCenterY,
-    });
-  }
-
-  updateVirtualFoods();
-}
-
-function updateVirtualFoods() {
-  const marginX = gridWidth * 0.1;
-  const marginY = gridHeight * 0.12;
-
-  for (const food of virtualFoods) {
-    const time = simulationFrame * food.speed;
-    food.x = lerp(marginX, gridWidth - marginX, noise(food.noiseX + time, food.noiseY));
-    food.y = lerp(marginY, gridHeight - marginY, noise(food.noiseX, food.noiseY + time));
+  for (let i = 0; i < INITIAL_FOOD_COUNT; i += 1) {
+    const progress = i / Math.max(1, INITIAL_FOOD_COUNT - 1);
+    const x = gridWidth * lerp(0.32, 0.68, progress);
+    const yBase = i % 2 === 0 ? random(0.38, 0.48) : random(0.52, 0.62);
+    foods.push(createFood(x, gridHeight * yBase));
   }
 }
 
-function spawnExploratoryBranch() {
-  if (activeCells.size === 0 || activeCells.size >= targetCellCount * 1.22) {
+function createFood(x, y) {
+  const shortestSide = Math.min(gridWidth, gridHeight);
+
+  return {
+    id: nextFoodId++,
+    x: clamp(x, 4, gridWidth - 4),
+    y: clamp(y, 4, gridHeight - 4),
+    radius: Math.max(5, shortestSide * 0.015),
+    orbitRadius: Math.max(18, shortestSide * 0.075),
+    lastInteractionFrame: Number.NEGATIVE_INFINITY,
+  };
+}
+
+function addFood(x, y) {
+  const food = createFood(x, y);
+  food.lastInteractionFrame = simulationFrame;
+  foods.push(food);
+  clearFoodInterior(food);
+  return food;
+}
+
+function clearFoodInteriors() {
+  for (const food of foods) {
+    clearFoodInterior(food);
+  }
+}
+
+function clearFoodInterior(food) {
+  const radius = Math.ceil(food.radius * 1.45);
+
+  for (let y = Math.floor(food.y - radius); y <= Math.ceil(food.y + radius); y += 1) {
+    for (let x = Math.floor(food.x - radius); x <= Math.ceil(food.x + radius); x += 1) {
+      if (!isInsideGrid(x, y) || Math.hypot(x - food.x, y - food.y) > radius) {
+        continue;
+      }
+      removeCell(y * gridWidth + x);
+    }
+  }
+}
+
+function spawnExploratoryBranch(preferredFood = null) {
+  if (activeCells.size === 0 || foods.length === 0 || activeCells.size >= targetCellCount * 1.4) {
     return;
   }
 
@@ -468,7 +492,7 @@ function spawnExploratoryBranch() {
     return;
   }
 
-  const target = virtualFoods[Math.floor(random(virtualFoods.length))];
+  const target = preferredFood || selectExplorationTarget();
   const originIndex = findExplorationOrigin(target);
   if (originIndex < 0) {
     return;
@@ -478,6 +502,21 @@ function spawnExploratoryBranch() {
   if (branch.path.length > 0) {
     branches.push(branch);
   }
+}
+
+function selectExplorationTarget() {
+  let mostRecent = foods[0];
+
+  for (let i = 1; i < foods.length; i += 1) {
+    if (foods[i].lastInteractionFrame > mostRecent.lastInteractionFrame) {
+      mostRecent = foods[i];
+    }
+  }
+
+  if (simulationFrame - mostRecent.lastInteractionFrame < TARGET_FPS * 15 && random() < 0.76) {
+    return mostRecent;
+  }
+  return foods[Math.floor(random(foods.length))];
 }
 
 function findExplorationOrigin(target) {
@@ -499,7 +538,8 @@ function findExplorationOrigin(target) {
     }
 
     const distanceToFood = Math.hypot(target.x - x, target.y - y);
-    const score = -distanceToFood - neighbors * shortestSide * 0.018 + random(-8, 8);
+    const orbitError = Math.abs(distanceToFood - target.orbitRadius);
+    const score = -orbitError - neighbors * shortestSide * 0.018 + random(-8, 8);
     if (score > bestScore) {
       bestScore = score;
       bestIndex = index;
@@ -515,6 +555,7 @@ function createForagingBranch(originIndex, target) {
   let x = originIndex % gridWidth;
   let y = Math.floor(originIndex / gridWidth);
   let heading = Math.atan2(target.y - y, target.x - x) + random(-0.5, 0.5);
+  const orbitDirection = random() < 0.5 ? -1 : 1;
   const noiseOffset = random(2000);
   const waveOffset = random(TWO_PI);
   const path = [];
@@ -523,10 +564,10 @@ function createForagingBranch(originIndex, target) {
 
   for (let step = 0; step < pathLength; step += 1) {
     const progress = step / Math.max(1, pathLength - 1);
-    const foodHeading = Math.atan2(target.y - y, target.x - x);
+    const orbitHeading = getFoodOrbitHeading(x, y, target, orbitDirection);
     const wander = (noise(noiseOffset + step * 0.055, simulationFrame * 0.0008) - 0.5) * 1.7;
     const wave = Math.sin(step * 0.13 + waveOffset) * 0.16;
-    heading = lerpAngle(heading, foodHeading + wander + wave, 0.085);
+    heading = lerpAngle(heading, orbitHeading + wander + wave, 0.11);
     heading += random(-0.045, 0.045);
 
     x += Math.cos(heading) * random(0.82, 1.2);
@@ -541,12 +582,21 @@ function createForagingBranch(originIndex, target) {
       continue;
     }
 
+    const foodDistance = Math.hypot(target.x - pointX, target.y - pointY);
+    if (foodDistance < target.radius * 1.45) {
+      heading = Math.atan2(pointY - target.y, pointX - target.x) + orbitDirection * HALF_PI;
+      continue;
+    }
+
+    const orbitError = Math.abs(foodDistance - target.orbitRadius);
+    const ringAffinity = 1 - clamp(orbitError / (target.orbitRadius * 0.7), 0, 1);
+
     path.push({
       x: pointX,
       y: pointY,
       radius: Math.max(0.52, lerp(1.45, 0.58, progress) + random(-0.15, 0.18)),
-      brightness: clamp(lerp(0.58, 0.25, progress) + random(-0.06, 0.06), 0.2, 0.64),
-      permanence: lerp(0.58, 0.22, progress),
+      brightness: clamp(lerp(0.28, 0.64, ringAffinity) + random(-0.06, 0.06), 0.2, 0.7),
+      permanence: lerp(0.22, 0.7, ringAffinity),
     });
 
     lastX = pointX;
@@ -559,6 +609,17 @@ function createForagingBranch(originIndex, target) {
     growthBudget: random(),
     growthRate: random(0.78, 1.24),
   };
+}
+
+function getFoodOrbitHeading(x, y, food, orbitDirection) {
+  const foodHeading = Math.atan2(food.y - y, food.x - x);
+  const distance = Math.max(0.001, Math.hypot(food.x - x, food.y - y));
+  const radialError = (distance - food.orbitRadius) / food.orbitRadius;
+  const tangentHeading = foodHeading + orbitDirection * HALF_PI;
+  const correctionHeading = radialError >= 0 ? foodHeading : foodHeading + Math.PI;
+  const correctionAmount = clamp(Math.abs(radialError) * 1.35, 0.06, 0.9);
+
+  return lerpAngle(tangentHeading, correctionHeading, correctionAmount);
 }
 
 function growBranchTips() {
@@ -615,10 +676,13 @@ function updateLivingEdge() {
     }
 
     const neighbors = countLivingNeighbors(targetX, targetY);
-    const food = getNearestVirtualFood(sourceX, sourceY);
-    const sourceDistance = squaredDistance(sourceX, sourceY, food.x, food.y);
-    const targetDistance = squaredDistance(targetX, targetY, food.x, food.y);
-    const foodBias = targetDistance < sourceDistance ? 1.28 : 0.72;
+    const food = getNearestFood(sourceX, sourceY);
+    const sourceDistance = Math.sqrt(squaredDistance(sourceX, sourceY, food.x, food.y));
+    const targetDistance = Math.sqrt(squaredDistance(targetX, targetY, food.x, food.y));
+    const sourceOrbitError = Math.abs(sourceDistance - food.orbitRadius);
+    const targetOrbitError = Math.abs(targetDistance - food.orbitRadius);
+    const ringAffinity = 1 - clamp(targetOrbitError / (food.orbitRadius * 0.7), 0, 1);
+    const foodBias = targetOrbitError < sourceOrbitError ? 1.32 : 0.68;
     const birthChance = (neighbors >= 2 && neighbors <= 5 ? 0.3 : 0.09)
       * populationPressure
       * massPressure
@@ -628,7 +692,7 @@ function updateLivingEdge() {
         targetX,
         targetY,
         clamp(energy[sourceIndex] * random(0.38, 0.72), 0.1, 0.34),
-        random(0.03, 0.16),
+        lerp(random(0.03, 0.16), random(0.5, 0.64), ringAffinity),
         random(190, 720),
       );
     }
@@ -651,18 +715,18 @@ function erodePersistentCells() {
 
     const x = index % gridWidth;
     const y = Math.floor(index / gridWidth);
-    if (Math.hypot(x - organismCenterX, y - organismCenterY) < protectedCoreRadius) {
-      continue;
-    }
-
+    const food = getNearestFood(x, y);
+    const foodDistance = Math.hypot(food.x - x, food.y - y);
+    const orbitError = Math.abs(foodDistance - food.orbitRadius);
+    const distanceFactor = clamp(orbitError / (food.orbitRadius * 0.8), 0.08, 1.6);
     const neighbors = countLivingNeighbors(x, y);
     const erosionField = noise(x * 0.018 + 600, y * 0.018 + 600, simulationFrame * 0.00075);
-    const erosionChance = (neighbors <= 3 ? 0.58 : 0.2) * erosionPressure;
+    const erosionChance = (neighbors <= 3 ? 0.58 : 0.2) * erosionPressure * distanceFactor;
     if (erosionField > 0.53 || random() >= erosionChance) {
       continue;
     }
 
-    stability[index] = Math.max(0, stability[index] - random(0.035, 0.07));
+    stability[index] = Math.max(0, stability[index] - random(0.035, 0.07) * distanceFactor);
     energy[index] *= random(0.9, 0.97);
 
     if (stability[index] < STABLE_THRESHOLD) {
@@ -672,12 +736,12 @@ function erodePersistentCells() {
   }
 }
 
-function getNearestVirtualFood(x, y) {
-  let nearest = virtualFoods[0];
+function getNearestFood(x, y) {
+  let nearest = foods[0];
   let nearestDistance = squaredDistance(x, y, nearest.x, nearest.y);
 
-  for (let i = 1; i < virtualFoods.length; i += 1) {
-    const food = virtualFoods[i];
+  for (let i = 1; i < foods.length; i += 1) {
+    const food = foods[i];
     const distance = squaredDistance(x, y, food.x, food.y);
     if (distance < nearestDistance) {
       nearest = food;
@@ -686,6 +750,16 @@ function getNearestVirtualFood(x, y) {
   }
 
   return nearest;
+}
+
+function isInsideFood(x, y) {
+  for (const food of foods) {
+    const exclusionRadius = food.radius * 1.45;
+    if (squaredDistance(x, y, food.x, food.y) < exclusionRadius * exclusionRadius) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function squaredDistance(x1, y1, x2, y2) {
@@ -744,12 +818,44 @@ function renderCells() {
 
   cellImage.updatePixels();
   image(cellImage, 0, 0, width, height);
+  renderFoods();
+}
+
+function renderFoods() {
+  const scaleX = width / gridWidth;
+  const scaleY = height / gridHeight;
+  const pulse = 1 + Math.sin(simulationFrame * 0.045) * 0.12;
+
+  push();
+  noSmooth();
+  for (const food of foods) {
+    const x = food.x * scaleX;
+    const y = food.y * scaleY;
+    const markerRadius = food.radius * scaleX * pulse;
+    const orbitRadius = food.orbitRadius * scaleX;
+    const isDragging = draggedFood === food;
+
+    noFill();
+    stroke(...COLORS.food, isDragging ? 48 : 22);
+    strokeWeight(1);
+    circle(x, y, orbitRadius * 2);
+
+    stroke(...COLORS.food, isDragging ? 150 : 82);
+    circle(x, y, markerRadius * 3.2);
+
+    noStroke();
+    fill(...COLORS.food, isDragging ? 255 : 225);
+    circle(x, y, markerRadius * 2);
+    fill(...COLORS.foodCore, 255);
+    circle(x, y, Math.max(3, markerRadius * 0.62));
+  }
+  pop();
 }
 
 function addCell(x, y, brightness, permanence, ttl = 0) {
   const cellX = Math.round(x);
   const cellY = Math.round(y);
-  if (!isInsideGrid(cellX, cellY)) {
+  if (!isInsideGrid(cellX, cellY) || isInsideFood(cellX, cellY)) {
     return;
   }
 
@@ -867,62 +973,94 @@ function clamp(value, minimum, maximum) {
   return Math.max(minimum, Math.min(maximum, value));
 }
 
-// クリック位置へ小さな塊と短い枝を追加する
-function addSmallColony(canvasX, canvasY) {
-  const centerX = (canvasX / width) * gridWidth;
-  const centerY = (canvasY / height) * gridHeight;
-  const localScale = Math.max(5, Math.min(gridWidth, gridHeight) * 0.025);
-
-  for (let i = 0; i < 3; i += 1) {
-    const angle = random(TWO_PI);
-    const offset = random(localScale * 0.4);
-    stampOrganicEllipse(
-      centerX + Math.cos(angle) * offset,
-      centerY + Math.sin(angle) * offset,
-      localScale * random(0.55, 1.05),
-      localScale * random(0.42, 0.82),
-      random(-1, 1),
-      CORE_DENSITY * random(0.84, 1),
-      random(0.68, 0.9),
-    );
-  }
-
-  const localBranchCount = Math.floor(random(3, 6));
-  for (let i = 0; i < localBranchCount; i += 1) {
-    const branch = createBranchPath(
-      centerX,
-      centerY,
-      localScale,
-      (TWO_PI * i) / localBranchCount + random(-0.45, 0.45),
-      Math.floor(random(localScale * 2.5, localScale * 5.2)),
-      branches.length + i + 100,
-    );
-
-    if (branch.path.length === 0) {
-      continue;
-    }
-
-    branch.drawn = Math.max(1, Math.floor(branch.path.length * random(0.52, 0.78)));
-    branch.growthBudget = random();
-    branch.growthRate = random(0.7, 1.15);
-
-    for (let pointIndex = 0; pointIndex < branch.drawn; pointIndex += 1) {
-      paintBranchPoint(branch.path[pointIndex]);
-    }
-    branches.push(branch);
-  }
-}
-
-function mousePressed() {
-  if (mouseX < 0 || mouseY < 0 || mouseX >= width || mouseY >= height) {
+function beginFoodInteraction(canvasX, canvasY) {
+  if (canvasX < 0 || canvasY < 0 || canvasX >= width || canvasY >= height) {
     return true;
   }
 
-  addSmallColony(mouseX, mouseY);
+  const gridX = (canvasX / width) * gridWidth;
+  const gridY = (canvasY / height) * gridHeight;
+  draggedFood = findFoodAt(gridX, gridY) || addFood(gridX, gridY);
+  draggedFood.lastInteractionFrame = simulationFrame;
+
   if (isPaused) {
     redraw();
   }
   return false;
+}
+
+function findFoodAt(x, y) {
+  for (let i = foods.length - 1; i >= 0; i -= 1) {
+    const food = foods[i];
+    if (Math.hypot(food.x - x, food.y - y) <= food.radius * 2.4) {
+      return food;
+    }
+  }
+  return null;
+}
+
+function updateInteractionCursor() {
+  if (draggedFood) {
+    cursor("grabbing");
+    return;
+  }
+
+  const gridX = (mouseX / width) * gridWidth;
+  const gridY = (mouseY / height) * gridHeight;
+  cursor(findFoodAt(gridX, gridY) ? "grab" : "crosshair");
+}
+
+function moveDraggedFood(canvasX, canvasY) {
+  if (!draggedFood) {
+    return true;
+  }
+
+  draggedFood.x = clamp((canvasX / width) * gridWidth, 4, gridWidth - 4);
+  draggedFood.y = clamp((canvasY / height) * gridHeight, 4, gridHeight - 4);
+  draggedFood.lastInteractionFrame = simulationFrame;
+  if (isPaused) {
+    redraw();
+  }
+  return false;
+}
+
+function endFoodInteraction() {
+  if (!draggedFood) {
+    return true;
+  }
+
+  clearFoodInterior(draggedFood);
+  spawnExploratoryBranch(draggedFood);
+  spawnExploratoryBranch(draggedFood);
+  draggedFood = null;
+  if (isPaused) {
+    redraw();
+  }
+  return false;
+}
+
+function mousePressed() {
+  return beginFoodInteraction(mouseX, mouseY);
+}
+
+function mouseDragged() {
+  return moveDraggedFood(mouseX, mouseY);
+}
+
+function mouseReleased() {
+  return endFoodInteraction();
+}
+
+function touchStarted() {
+  return beginFoodInteraction(mouseX, mouseY);
+}
+
+function touchMoved() {
+  return moveDraggedFood(mouseX, mouseY);
+}
+
+function touchEnded() {
+  return endFoodInteraction();
 }
 
 function keyPressed() {
