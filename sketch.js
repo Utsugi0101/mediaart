@@ -44,6 +44,7 @@ let maxDynamicCells = 0;
 let growthSpeedMultiplier = 1;
 let foods;
 let draggedFood = null;
+let didDragFood = false;
 let nextFoodId = 1;
 let targetCellCount = 0;
 
@@ -165,6 +166,7 @@ function initializeGrid() {
   branches = [];
   foods = [];
   draggedFood = null;
+  didDragFood = false;
   nextFoodId = 1;
   targetCellCount = 0;
   maxDynamicCells = Math.max(500, Math.floor(cellCount * 0.014));
@@ -428,12 +430,27 @@ function scatterParticles(centerX, centerY, coreScale) {
 
 function initializeFoods() {
   foods = [];
+  const shortestSide = Math.min(gridWidth, gridHeight);
+  const marginX = gridWidth * 0.15;
+  const marginY = gridHeight * 0.18;
+  const minimumSeparation = shortestSide * 0.38;
 
   for (let i = 0; i < INITIAL_FOOD_COUNT; i += 1) {
-    const progress = i / Math.max(1, INITIAL_FOOD_COUNT - 1);
-    const x = gridWidth * lerp(0.32, 0.68, progress);
-    const yBase = i % 2 === 0 ? random(0.38, 0.48) : random(0.52, 0.62);
-    foods.push(createFood(x, gridHeight * yBase));
+    let x;
+    let y;
+
+    for (let attempt = 0; attempt < 48; attempt += 1) {
+      x = random(marginX, gridWidth - marginX);
+      y = random(marginY, gridHeight - marginY);
+      const isSeparated = foods.every(
+        (food) => Math.hypot(food.x - x, food.y - y) >= minimumSeparation,
+      );
+      if (isSeparated) {
+        break;
+      }
+    }
+
+    foods.push(createFood(x, y));
   }
 }
 
@@ -448,14 +465,6 @@ function createFood(x, y) {
     orbitRadius: Math.max(18, shortestSide * 0.075),
     lastInteractionFrame: Number.NEGATIVE_INFINITY,
   };
-}
-
-function addFood(x, y) {
-  const food = createFood(x, y);
-  food.lastInteractionFrame = simulationFrame;
-  foods.push(food);
-  clearFoodInterior(food);
-  return food;
 }
 
 function clearFoodInteriors() {
@@ -980,8 +989,11 @@ function beginFoodInteraction(canvasX, canvasY) {
 
   const gridX = (canvasX / width) * gridWidth;
   const gridY = (canvasY / height) * gridHeight;
-  draggedFood = findFoodAt(gridX, gridY) || addFood(gridX, gridY);
-  draggedFood.lastInteractionFrame = simulationFrame;
+  draggedFood = findFoodAt(gridX, gridY);
+  didDragFood = false;
+  if (!draggedFood) {
+    return true;
+  }
 
   if (isPaused) {
     redraw();
@@ -1007,7 +1019,7 @@ function updateInteractionCursor() {
 
   const gridX = (mouseX / width) * gridWidth;
   const gridY = (mouseY / height) * gridHeight;
-  cursor(findFoodAt(gridX, gridY) ? "grab" : "crosshair");
+  cursor(findFoodAt(gridX, gridY) ? "grab" : "default");
 }
 
 function moveDraggedFood(canvasX, canvasY) {
@@ -1015,9 +1027,14 @@ function moveDraggedFood(canvasX, canvasY) {
     return true;
   }
 
-  draggedFood.x = clamp((canvasX / width) * gridWidth, 4, gridWidth - 4);
-  draggedFood.y = clamp((canvasY / height) * gridHeight, 4, gridHeight - 4);
-  draggedFood.lastInteractionFrame = simulationFrame;
+  const nextX = clamp((canvasX / width) * gridWidth, 4, gridWidth - 4);
+  const nextY = clamp((canvasY / height) * gridHeight, 4, gridHeight - 4);
+  if (Math.hypot(nextX - draggedFood.x, nextY - draggedFood.y) > 0.05) {
+    draggedFood.x = nextX;
+    draggedFood.y = nextY;
+    draggedFood.lastInteractionFrame = simulationFrame;
+    didDragFood = true;
+  }
   if (isPaused) {
     redraw();
   }
@@ -1029,10 +1046,13 @@ function endFoodInteraction() {
     return true;
   }
 
-  clearFoodInterior(draggedFood);
-  spawnExploratoryBranch(draggedFood);
-  spawnExploratoryBranch(draggedFood);
+  if (didDragFood) {
+    clearFoodInterior(draggedFood);
+    spawnExploratoryBranch(draggedFood);
+    spawnExploratoryBranch(draggedFood);
+  }
   draggedFood = null;
+  didDragFood = false;
   if (isPaused) {
     redraw();
   }
