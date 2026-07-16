@@ -1,0 +1,77 @@
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#artwork {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+html,
+body {
+  overflow: hidden;
+  background: #010308;
+}
+
+body,
+#artwork {
+  display: grid;
+  place-items: center;
+}
+
+.speed-control {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid rgb(105 154 188 / 45%);
+  border-radius: 8px;
+  background: rgb(1 4 9 / 78%);
+  color: #eff8ff;
+  font: 12px/1 system-ui, sans-serif;
+  backdrop-filter: blur(6px);
+}
+
+.speed-control span {
+  margin: 0 4px;
+}
+
+.speed-control button {
+  min-width: 48px;
+  padding: 7px 9px;
+  border: 1px solid #18344c;
+  border-radius: 5px;
+  background: #07131e;
+  color: #699abc;
+  cursor: pointer;
+}
+
+.speed-control button:hover,
+.speed-control button:focus-visible {
+  border-color: #699abc;
+  outline: none;
+}
+
+.speed-control button.is-active {
+  border-color: #eff8ff;
+  background: #18344c;
+  color: #eff8ff;
+}
+
+canvas {
+  display: block;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  touch-action: none;
+}

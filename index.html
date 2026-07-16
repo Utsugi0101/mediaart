@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>モジホコリ</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main id="artwork"></main>
+    <div class="speed-control" role="group" aria-label="成長速度">
+      <span>成長速度</span>
+      <button type="button" data-speed="0.1">0.1×</button>
+      <button type="button" data-speed="1" class="is-active" aria-pressed="true">1×</button>
+      <button type="button" data-speed="100">100×</button>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/p5@1.9.4/lib/p5.min.js"></script>
+    <script src="sketch.js"></script>
+  </body>
+</html>
