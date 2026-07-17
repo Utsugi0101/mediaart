@@ -17,20 +17,59 @@ const REMODELING_INTERVAL = 12;
 const FOOD_UPDATE_INTERVAL = 6;
 
 const COLORS = {
-  background: [1, 4, 9],
-  edge: [19, 45, 66],
-  body: [93, 147, 181],
-  core: [239, 248, 255],
-  food: [255, 188, 82],
-  foodCore: [255, 246, 204],
-  obstacle: [7, 12, 16],
-  obstacleEdge: [83, 103, 114],
-  obstacleText: [136, 158, 168],
+  edge: [96, 67, 2],
+  body: [225, 176, 8],
+  core: [255, 244, 94],
+  food: [229, 128, 72],
+  foodCore: [255, 231, 185],
 };
+
+const ENVIRONMENTS = [
+  {
+    name: "朽ち木",
+    kind: "wood",
+    base: [18, 11, 5],
+    mid: [53, 31, 13],
+    highlight: [105, 69, 30],
+    shadow: [7, 5, 3],
+    obstacle: [25, 20, 13],
+    obstacleEdge: [124, 97, 55],
+    obstacleText: [184, 157, 105],
+    noiseOffset: 17.3,
+  },
+  {
+    name: "腐葉土",
+    kind: "leaf-litter",
+    base: [13, 9, 5],
+    mid: [47, 29, 13],
+    highlight: [103, 66, 27],
+    shadow: [5, 5, 3],
+    obstacle: [29, 24, 15],
+    obstacleEdge: [112, 91, 55],
+    obstacleText: [174, 148, 99],
+    noiseOffset: 53.9,
+  },
+  {
+    name: "湿った岩",
+    kind: "wet-rock",
+    base: [8, 14, 12],
+    mid: [28, 42, 35],
+    highlight: [76, 89, 68],
+    shadow: [4, 8, 8],
+    obstacle: [20, 29, 27],
+    obstacleEdge: [106, 125, 109],
+    obstacleText: [163, 182, 156],
+    noiseOffset: 91.7,
+  },
+];
 
 let gridWidth;
 let gridHeight;
 let cellImage;
+let environmentImage;
+let previousEnvironmentImage;
+let environmentTransition = 1;
+let environmentIndex = 0;
 let trailField;
 let nextTrailField;
 let tubeField;
@@ -62,6 +101,7 @@ function setup() {
   noSmooth();
   frameRate(TARGET_FPS);
   setupSpeedControls();
+  setupEnvironmentControl();
   regenerate();
 }
 
@@ -80,6 +120,43 @@ function setupSpeedControls() {
       }
     });
   }
+}
+
+function setupEnvironmentControl() {
+  const button = document.getElementById("environment-toggle");
+  if (!button) {
+    return;
+  }
+
+  button.addEventListener("click", () => {
+    environmentIndex = (environmentIndex + 1) % ENVIRONMENTS.length;
+    palette = buildPalette();
+    updateEnvironmentControl();
+    buildEnvironmentImage(!isPaused && !prefersReducedMotion());
+
+    if (isPaused) {
+      redraw();
+    }
+  });
+
+  updateEnvironmentControl();
+}
+
+function updateEnvironmentControl() {
+  const button = document.getElementById("environment-toggle");
+  const name = document.getElementById("environment-name");
+  const environment = ENVIRONMENTS[environmentIndex];
+
+  if (name) {
+    name.textContent = environment.name;
+  }
+  if (button) {
+    button.setAttribute("aria-label", `環境を変える。現在: ${environment.name}`);
+  }
+}
+
+function prefersReducedMotion() {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
 function draw() {
@@ -128,6 +205,7 @@ function regenerate() {
   nextFoodId = 1;
 
   initializeGrid();
+  buildEnvironmentImage(false);
   initializeFoods();
   initializeObstacles();
   initializeOrganism();
@@ -166,7 +244,89 @@ function initializeGrid() {
   baseParticleTarget = clamp(Math.floor(cellCount * 0.028), 1500, 4200);
 
   cellImage = createImage(gridWidth, gridHeight);
+  environmentImage = null;
+  previousEnvironmentImage = null;
+  environmentTransition = 1;
   palette = buildPalette();
+}
+
+function buildEnvironmentImage(animate) {
+  const environment = ENVIRONMENTS[environmentIndex];
+  const nextImage = createImage(gridWidth, gridHeight);
+  nextImage.loadPixels();
+
+  for (let y = 0; y < gridHeight; y += 1) {
+    for (let x = 0; x < gridWidth; x += 1) {
+      const color = getEnvironmentPixel(environment, x, y);
+      const pixelIndex = (y * gridWidth + x) * 4;
+      nextImage.pixels[pixelIndex] = color[0];
+      nextImage.pixels[pixelIndex + 1] = color[1];
+      nextImage.pixels[pixelIndex + 2] = color[2];
+      nextImage.pixels[pixelIndex + 3] = 255;
+    }
+  }
+
+  nextImage.updatePixels();
+  previousEnvironmentImage = animate ? environmentImage : null;
+  environmentImage = nextImage;
+  environmentTransition = previousEnvironmentImage ? 0 : 1;
+}
+
+function getEnvironmentPixel(environment, x, y) {
+  const seedOffset = (generationSeed % 10_000) * 0.0001;
+  const offset = environment.noiseOffset + seedOffset;
+  const broad = noise(x * 0.018 + offset, y * 0.018 - offset);
+  const detail = noise(x * 0.092 - offset, y * 0.092 + offset);
+  const fleck = pixelHash(x, y, generationSeed + environment.noiseOffset * 100);
+  let color;
+
+  if (environment.kind === "wood") {
+    const warp = noise(x * 0.027 + offset * 2, offset) * 9;
+    const grain = Math.sin(y * 0.31 + x * 0.012 + warp);
+    const amount = clamp(broad * 0.58 + detail * 0.14 + (grain + 1) * 0.14, 0, 1);
+    color = mixColor(environment.base, environment.mid, amount);
+
+    if (Math.abs(grain) > 0.88) {
+      color = mixColor(color, grain > 0 ? environment.highlight : environment.shadow, 0.2);
+    }
+    if (fleck > 0.996) {
+      color = mixColor(color, environment.highlight, 0.35);
+    }
+    return color;
+  }
+
+  if (environment.kind === "leaf-litter") {
+    const clump = noise(x * 0.045 + offset * 3, y * 0.038 - offset * 2);
+    const amount = clamp(broad * 0.48 + clump * 0.38 + detail * 0.14, 0, 1);
+    color = mixColor(environment.base, environment.mid, amount);
+
+    if (fleck > 0.982) {
+      color = mixColor(color, environment.highlight, 0.45 + fleck * 0.25);
+    } else if (fleck < 0.025) {
+      color = mixColor(color, environment.shadow, 0.55);
+    }
+    return color;
+  }
+
+  const cloud = noise(x * 0.034 + offset * 2, y * 0.029 - offset * 2);
+  const seamNoise = noise(x * 0.025 - offset, y * 0.025 + offset * 3);
+  const amount = clamp(broad * 0.36 + cloud * 0.5 + detail * 0.14, 0, 1);
+  color = mixColor(environment.base, environment.mid, amount);
+
+  if (Math.abs(seamNoise - 0.5) < 0.018) {
+    color = mixColor(color, environment.shadow, 0.72);
+  } else if (cloud > 0.66 && detail > 0.55) {
+    color = mixColor(color, environment.highlight, (cloud - 0.66) * 0.9);
+  }
+  if (fleck > 0.995) {
+    color = mixColor(color, environment.highlight, 0.4);
+  }
+  return color;
+}
+
+function pixelHash(x, y, salt) {
+  const value = Math.sin(x * 12.9898 + y * 78.233 + salt * 0.001) * 43758.5453;
+  return value - Math.floor(value);
 }
 
 function initializeFoods() {
@@ -757,7 +917,7 @@ function countOccupiedNeighbors(x, y, radius) {
 }
 
 function renderSimulation() {
-  background(...COLORS.background);
+  renderEnvironment();
   cellImage.loadPixels();
   cellImage.pixels.fill(0);
 
@@ -798,9 +958,36 @@ function renderSimulation() {
   renderFoods();
 }
 
+function renderEnvironment() {
+  const environment = ENVIRONMENTS[environmentIndex];
+  background(...environment.base);
+
+  if (!environmentImage) {
+    return;
+  }
+
+  if (previousEnvironmentImage && environmentTransition < 1) {
+    image(previousEnvironmentImage, 0, 0, width, height);
+    const easedTransition = environmentTransition * environmentTransition * (3 - 2 * environmentTransition);
+    push();
+    tint(255, Math.round(easedTransition * 255));
+    image(environmentImage, 0, 0, width, height);
+    pop();
+
+    environmentTransition = Math.min(1, environmentTransition + 0.055);
+    if (environmentTransition >= 1) {
+      previousEnvironmentImage = null;
+    }
+    return;
+  }
+
+  image(environmentImage, 0, 0, width, height);
+}
+
 function renderObstacles() {
   const scaleX = width / gridWidth;
   const scaleY = height / gridHeight;
+  const environment = ENVIRONMENTS[environmentIndex];
 
   push();
   noSmooth();
@@ -808,8 +995,8 @@ function renderObstacles() {
   textSize(10);
 
   for (const obstacle of obstacles) {
-    fill(...COLORS.obstacle, 248);
-    stroke(...COLORS.obstacleEdge, 205);
+    fill(...environment.obstacle, 248);
+    stroke(...environment.obstacleEdge, 205);
     strokeWeight(1.25);
     beginShape();
 
@@ -828,14 +1015,14 @@ function renderObstacles() {
     endShape(CLOSE);
 
     noFill();
-    stroke(...COLORS.obstacleEdge, 55);
+    stroke(...environment.obstacleEdge, 55);
     circle(
       obstacle.x * scaleX,
       obstacle.y * scaleY,
       Math.min(obstacle.radiusX * scaleX, obstacle.radiusY * scaleY) * 1.15,
     );
     noStroke();
-    fill(...COLORS.obstacleText, 175);
+    fill(...environment.obstacleText, 175);
     text("障害物", obstacle.x * scaleX, obstacle.y * scaleY);
   }
 
@@ -920,13 +1107,14 @@ function isInsideGrid(x, y) {
 
 function buildPalette() {
   const colors = [];
+  const background = ENVIRONMENTS[environmentIndex].base;
 
   for (let i = 0; i < PALETTE_STEPS; i += 1) {
     const amount = i / (PALETTE_STEPS - 1);
     let color;
 
     if (amount < 0.34) {
-      color = mixColor(COLORS.background, COLORS.edge, amount / 0.34);
+      color = mixColor(background, COLORS.edge, amount / 0.34);
     } else if (amount < 0.78) {
       color = mixColor(COLORS.edge, COLORS.body, (amount - 0.34) / 0.44);
     } else {

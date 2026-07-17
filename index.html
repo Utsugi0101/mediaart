@@ -4,11 +4,21 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>モジホコリ</title>
-    <link rel="stylesheet" href="style.css?v=20260717-5" />
+    <link rel="stylesheet" href="style.css?v=20260717-8" />
   </head>
   <body>
     <main id="artwork"></main>
-    <p class="interaction-hint">餌は離した場所で反応し、灰色の障害物を避けます</p>
+    <p class="interaction-hint">餌は離した場所で反応し、障害物を避けます</p>
+    <button
+      id="environment-toggle"
+      class="environment-control"
+      type="button"
+      aria-label="環境を変える。現在: 朽ち木"
+    >
+      <span>環境を変える</span>
+      <strong id="environment-name" aria-live="polite">朽ち木</strong>
+      <span class="environment-control__icon" aria-hidden="true">↻</span>
+    </button>
     <div class="speed-control" role="group" aria-label="成長速度">
       <span>成長速度</span>
       <button type="button" data-speed="0.1">0.1×</button>
@@ -19,6 +29,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/p5@1.9.4/lib/p5.min.js"></script>
-    <script src="sketch.js?v=20260717-7"></script>
+    <script src="sketch.js?v=20260717-8"></script>
   </body>
 </html>
