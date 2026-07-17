@@ -38,7 +38,7 @@ let palette;
 let baseParticleTarget;
 let simulationFrame = 0;
 let speedAccumulator = 0;
-let growthSpeedMultiplier = 1;
+let growthSpeedMultiplier = 20;
 let generationSeed = 0;
 let isPaused = false;
 let draggedFood = null;
