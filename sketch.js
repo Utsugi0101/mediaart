@@ -4,6 +4,7 @@ const MAX_GRID_WIDTH = 480;
 const MAX_GRID_HEIGHT = 270;
 const TARGET_FPS = 30;
 const INITIAL_FOOD_COUNT = 2;
+const INITIAL_OBSTACLE_COUNT = 3;
 const PALETTE_STEPS = 48;
 
 const SENSOR_OFFSET = 6;
@@ -22,6 +23,9 @@ const COLORS = {
   core: [239, 248, 255],
   food: [255, 188, 82],
   foodCore: [255, 246, 204],
+  obstacle: [7, 12, 16],
+  obstacleEdge: [83, 103, 114],
+  obstacleText: [136, 158, 168],
 };
 
 let gridWidth;
@@ -32,8 +36,10 @@ let nextTrailField;
 let tubeField;
 let nextTubeField;
 let occupancy;
+let obstacleMask;
 let particles;
 let foods;
+let obstacles;
 let palette;
 let baseParticleTarget;
 let simulationFrame = 0;
@@ -123,6 +129,7 @@ function regenerate() {
 
   initializeGrid();
   initializeFoods();
+  initializeObstacles();
   initializeOrganism();
 
   for (let pass = 0; pass < 5; pass += 1) {
@@ -152,8 +159,10 @@ function initializeGrid() {
   tubeField = new Float32Array(cellCount);
   nextTubeField = new Float32Array(cellCount);
   occupancy = new Uint8Array(cellCount);
+  obstacleMask = new Uint8Array(cellCount);
   particles = [];
   foods = [];
+  obstacles = [];
   baseParticleTarget = clamp(Math.floor(cellCount * 0.028), 1500, 4200);
 
   cellImage = createImage(gridWidth, gridHeight);
@@ -199,6 +208,115 @@ function createFood(x, y) {
   };
 }
 
+function initializeObstacles() {
+  const shortestSide = Math.min(gridWidth, gridHeight);
+  obstacles = [];
+
+  for (let i = 0; i < INITIAL_OBSTACLE_COUNT; i += 1) {
+    let candidate = null;
+
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      const radiusX = shortestSide * random(0.055, 0.115);
+      const radiusY = shortestSide * random(0.04, 0.09);
+      let x;
+      let y;
+
+      if (i === 0 && foods.length >= 2 && attempt < 28) {
+        const first = foods[0];
+        const second = foods[1];
+        const progress = random(0.36, 0.64);
+        const dx = second.x - first.x;
+        const dy = second.y - first.y;
+        const distance = Math.max(1, Math.hypot(dx, dy));
+        const offset = random(-shortestSide * 0.07, shortestSide * 0.07);
+        x = lerp(first.x, second.x, progress) - (dy / distance) * offset;
+        y = lerp(first.y, second.y, progress) + (dx / distance) * offset;
+      } else {
+        x = random(radiusX + 8, gridWidth - radiusX - 8);
+        y = random(radiusY + 8, gridHeight - radiusY - 8);
+      }
+
+      candidate = {
+        id: i + 1,
+        x,
+        y,
+        radiusX,
+        radiusY,
+        rotation: random(TWO_PI),
+        edgePhase: random(TWO_PI),
+      };
+
+      const insideBounds = (
+        x - radiusX > 5
+        && x + radiusX < gridWidth - 5
+        && y - radiusY > 5
+        && y + radiusY < gridHeight - 5
+      );
+      const clearOfFoods = foods.every(
+        (food) => Math.hypot(food.x - x, food.y - y) > Math.max(radiusX, radiusY) + food.radius * 2.2,
+      );
+      const clearOfObstacles = obstacles.every((obstacle) => (
+        Math.hypot(obstacle.x - x, obstacle.y - y)
+        > Math.max(obstacle.radiusX, obstacle.radiusY) + Math.max(radiusX, radiusY) + shortestSide * 0.035
+      ));
+
+      if (insideBounds && clearOfFoods && clearOfObstacles) {
+        break;
+      }
+      candidate = null;
+    }
+
+    if (candidate) {
+      obstacles.push(candidate);
+    }
+  }
+
+  buildObstacleMask();
+}
+
+function buildObstacleMask() {
+  obstacleMask.fill(0);
+
+  for (const obstacle of obstacles) {
+    const extent = Math.ceil(Math.max(obstacle.radiusX, obstacle.radiusY) * 1.2);
+    for (let y = Math.floor(obstacle.y - extent); y <= Math.ceil(obstacle.y + extent); y += 1) {
+      for (let x = Math.floor(obstacle.x - extent); x <= Math.ceil(obstacle.x + extent); x += 1) {
+        if (isInsideGrid(x, y) && isPointInsideObstacle(x, y, obstacle)) {
+          obstacleMask[y * gridWidth + x] = 1;
+        }
+      }
+    }
+  }
+}
+
+function isPointInsideObstacle(x, y, obstacle, padding = 0) {
+  const dx = x - obstacle.x;
+  const dy = y - obstacle.y;
+  const cosRotation = Math.cos(obstacle.rotation);
+  const sinRotation = Math.sin(obstacle.rotation);
+  const localX = dx * cosRotation + dy * sinRotation;
+  const localY = -dx * sinRotation + dy * cosRotation;
+  const radiusX = obstacle.radiusX + padding;
+  const radiusY = obstacle.radiusY + padding;
+  const normalizedX = localX / radiusX;
+  const normalizedY = localY / radiusY;
+  const angle = Math.atan2(normalizedY, normalizedX);
+  const distance = Math.hypot(normalizedX, normalizedY);
+
+  return distance <= getObstacleEdgeScale(angle, obstacle);
+}
+
+function getObstacleEdgeScale(angle, obstacle) {
+  return 1
+    + Math.sin(angle * 3 + obstacle.edgePhase) * 0.105
+    + Math.sin(angle * 5 - obstacle.edgePhase * 1.7) * 0.055
+    + Math.sin(angle * 8 + obstacle.edgePhase * 0.6) * 0.025;
+}
+
+function isObstacleCell(x, y) {
+  return isInsideGrid(x, y) && obstacleMask[y * gridWidth + x] !== 0;
+}
+
 function initializeOrganism() {
   const shortestSide = Math.min(gridWidth, gridHeight);
   const origin = chooseOrganismOrigin(shortestSide);
@@ -228,13 +346,15 @@ function initializeOrganism() {
     }
 
     const index = y * gridWidth + x;
-    if (occupancy[index] !== 0) {
+    if (occupancy[index] !== 0 || obstacleMask[index] !== 0) {
       continue;
     }
 
     const food = getNearestFood(x, y);
     const foodHeading = Math.atan2(food.y - y, food.x - x);
-    addParticle(x, y, foodHeading + random(-Math.PI * 0.85, Math.PI * 0.85));
+    if (!addParticle(x, y, foodHeading + random(-Math.PI * 0.85, Math.PI * 0.85))) {
+      continue;
+    }
     trailField[index] = Math.max(trailField[index], random(0.75, 1.2));
     tubeField[index] = Math.max(tubeField[index], random(0.08, 0.22));
   }
@@ -251,6 +371,12 @@ function chooseOrganismOrigin(shortestSide) {
       x: random(marginX, gridWidth - marginX),
       y: random(marginY, gridHeight - marginY),
     };
+    if (obstacles.some((obstacle) => (
+      isPointInsideObstacle(candidate.x, candidate.y, obstacle, shortestSide * 0.16)
+    ))) {
+      continue;
+    }
+
     const nearestDistance = Math.min(
       ...foods.map((food) => Math.hypot(food.x - candidate.x, food.y - candidate.y)),
     );
@@ -275,7 +401,7 @@ function addParticle(x, y, heading) {
   }
 
   const index = cellY * gridWidth + cellX;
-  if (occupancy[index] !== 0) {
+  if (occupancy[index] !== 0 || obstacleMask[index] !== 0) {
     return false;
   }
 
@@ -316,7 +442,7 @@ function moveParticles() {
     const nextX = Math.round(currentX + Math.cos(particle.heading));
     const nextY = Math.round(currentY + Math.sin(particle.heading));
 
-    if (!isInsideGrid(nextX, nextY)) {
+    if (!isInsideGrid(nextX, nextY) || isObstacleCell(nextX, nextY)) {
       particle.heading = normalizeAngle(particle.heading + Math.PI + randomSigned(0.55));
       continue;
     }
@@ -372,7 +498,7 @@ function steerParticle(particle) {
 function sampleGuidance(x, y) {
   const cellX = Math.round(x);
   const cellY = Math.round(y);
-  if (!isInsideGrid(cellX, cellY)) {
+  if (!isInsideGrid(cellX, cellY) || isObstacleCell(cellX, cellY)) {
     return -100;
   }
 
@@ -423,6 +549,12 @@ function diffuseFields(elapsedSteps) {
 
     for (let x = 0; x < gridWidth; x += 1) {
       const index = row + x;
+      if (obstacleMask[index] !== 0) {
+        nextTrailField[index] = 0;
+        nextTubeField[index] = 0;
+        continue;
+      }
+
       const left = row + (x > 0 ? x - 1 : x);
       const right = row + (x < gridWidth - 1 ? x + 1 : x);
       const up = upRow + x;
@@ -662,7 +794,52 @@ function renderSimulation() {
 
   cellImage.updatePixels();
   image(cellImage, 0, 0, width, height);
+  renderObstacles();
   renderFoods();
+}
+
+function renderObstacles() {
+  const scaleX = width / gridWidth;
+  const scaleY = height / gridHeight;
+
+  push();
+  noSmooth();
+  textAlign(CENTER, CENTER);
+  textSize(10);
+
+  for (const obstacle of obstacles) {
+    fill(...COLORS.obstacle, 248);
+    stroke(...COLORS.obstacleEdge, 205);
+    strokeWeight(1.25);
+    beginShape();
+
+    for (let step = 0; step < 48; step += 1) {
+      const angle = (TWO_PI * step) / 48;
+      const edgeScale = getObstacleEdgeScale(angle, obstacle);
+      const localX = Math.cos(angle) * obstacle.radiusX * edgeScale;
+      const localY = Math.sin(angle) * obstacle.radiusY * edgeScale;
+      const cosRotation = Math.cos(obstacle.rotation);
+      const sinRotation = Math.sin(obstacle.rotation);
+      const x = obstacle.x + localX * cosRotation - localY * sinRotation;
+      const y = obstacle.y + localX * sinRotation + localY * cosRotation;
+      vertex(x * scaleX, y * scaleY);
+    }
+
+    endShape(CLOSE);
+
+    noFill();
+    stroke(...COLORS.obstacleEdge, 55);
+    circle(
+      obstacle.x * scaleX,
+      obstacle.y * scaleY,
+      Math.min(obstacle.radiusX * scaleX, obstacle.radiusY * scaleY) * 1.15,
+    );
+    noStroke();
+    fill(...COLORS.obstacleText, 175);
+    text("障害物", obstacle.x * scaleX, obstacle.y * scaleY);
+  }
+
+  pop();
 }
 
 function renderFoods() {
