@@ -89,6 +89,9 @@ let isPaused = false;
 let draggedFood = null;
 let didDragFood = false;
 let dragSnapshot = null;
+let draggedObstacle = null;
+let didDragObstacle = false;
+let obstacleDragSnapshot = null;
 let nextFoodId = 1;
 
 function setup() {
@@ -202,6 +205,9 @@ function regenerate() {
   draggedFood = null;
   didDragFood = false;
   dragSnapshot = null;
+  draggedObstacle = null;
+  didDragObstacle = false;
+  obstacleDragSnapshot = null;
   nextFoodId = 1;
 
   initializeGrid();
@@ -404,6 +410,7 @@ function initializeObstacles() {
         radiusY,
         rotation: random(TWO_PI),
         edgePhase: random(TWO_PI),
+        isPlaced: true,
       };
 
       const insideBounds = (
@@ -438,6 +445,10 @@ function buildObstacleMask() {
   obstacleMask.fill(0);
 
   for (const obstacle of obstacles) {
+    if (!obstacle.isPlaced) {
+      continue;
+    }
+
     const extent = Math.ceil(Math.max(obstacle.radiusX, obstacle.radiusY) * 1.2);
     for (let y = Math.floor(obstacle.y - extent); y <= Math.ceil(obstacle.y + extent); y += 1) {
       for (let x = Math.floor(obstacle.x - extent); x <= Math.ceil(obstacle.x + extent); x += 1) {
@@ -447,6 +458,88 @@ function buildObstacleMask() {
       }
     }
   }
+}
+
+function reconcileOrganismWithObstacles() {
+  const retainedParticles = [];
+  const displacedParticles = [];
+  occupancy.fill(0);
+
+  for (const particle of particles) {
+    const index = particle.y * gridWidth + particle.x;
+    if (obstacleMask[index] !== 0) {
+      displacedParticles.push({
+        particle,
+        trail: trailField[index],
+        tube: tubeField[index],
+      });
+      continue;
+    }
+
+    if (occupancy[index] === 0) {
+      occupancy[index] = 1;
+      retainedParticles.push(particle);
+    }
+  }
+
+  for (let index = 0; index < obstacleMask.length; index += 1) {
+    if (obstacleMask[index] === 0) {
+      continue;
+    }
+
+    occupancy[index] = 0;
+    trailField[index] = 0;
+    nextTrailField[index] = 0;
+    tubeField[index] = 0;
+    nextTubeField[index] = 0;
+  }
+
+  const maxSearchRadius = Math.ceil(Math.min(gridWidth, gridHeight) * 0.38);
+  for (const displaced of displacedParticles) {
+    const particle = displaced.particle;
+    const target = findNearestFreeCell(particle.x, particle.y, maxSearchRadius);
+    if (!target) {
+      continue;
+    }
+
+    const escapeHeading = Math.atan2(target.y - particle.y, target.x - particle.x);
+    particle.x = target.x;
+    particle.y = target.y;
+    particle.heading = normalizeAngle(escapeHeading + randomSigned(0.3));
+
+    const targetIndex = target.y * gridWidth + target.x;
+    occupancy[targetIndex] = 1;
+    trailField[targetIndex] = Math.max(trailField[targetIndex], displaced.trail * 0.72, 0.38);
+    nextTrailField[targetIndex] = Math.max(nextTrailField[targetIndex], trailField[targetIndex]);
+    tubeField[targetIndex] = Math.max(tubeField[targetIndex], displaced.tube * 0.68);
+    nextTubeField[targetIndex] = Math.max(nextTubeField[targetIndex], tubeField[targetIndex]);
+    retainedParticles.push(particle);
+  }
+
+  particles = retainedParticles;
+}
+
+function findNearestFreeCell(x, y, maxRadius) {
+  const phase = pixelHash(Math.round(x), Math.round(y), generationSeed) * TWO_PI;
+
+  for (let radius = 1; radius <= maxRadius; radius += 1) {
+    const sampleCount = Math.max(8, Math.ceil(TWO_PI * radius * 1.3));
+    for (let sample = 0; sample < sampleCount; sample += 1) {
+      const angle = phase + (TWO_PI * sample) / sampleCount;
+      const candidateX = Math.round(x + Math.cos(angle) * radius);
+      const candidateY = Math.round(y + Math.sin(angle) * radius);
+      if (!isInsideGrid(candidateX, candidateY)) {
+        continue;
+      }
+
+      const index = candidateY * gridWidth + candidateX;
+      if (obstacleMask[index] === 0 && occupancy[index] === 0) {
+        return { x: candidateX, y: candidateY };
+      }
+    }
+  }
+
+  return null;
 }
 
 function isPointInsideObstacle(x, y, obstacle, padding = 0) {
@@ -995,9 +1088,11 @@ function renderObstacles() {
   textSize(10);
 
   for (const obstacle of obstacles) {
-    fill(...environment.obstacle, 248);
-    stroke(...environment.obstacleEdge, 205);
-    strokeWeight(1.25);
+    const isPreview = !obstacle.isPlaced;
+    drawingContext.setLineDash(isPreview ? [5, 4] : []);
+    fill(...environment.obstacle, isPreview ? 82 : 248);
+    stroke(...environment.obstacleEdge, isPreview ? 225 : 205);
+    strokeWeight(isPreview ? 1.7 : 1.25);
     beginShape();
 
     for (let step = 0; step < 48; step += 1) {
@@ -1015,17 +1110,19 @@ function renderObstacles() {
     endShape(CLOSE);
 
     noFill();
-    stroke(...environment.obstacleEdge, 55);
+    drawingContext.setLineDash([]);
+    stroke(...environment.obstacleEdge, isPreview ? 110 : 55);
     circle(
       obstacle.x * scaleX,
       obstacle.y * scaleY,
       Math.min(obstacle.radiusX * scaleX, obstacle.radiusY * scaleY) * 1.15,
     );
     noStroke();
-    fill(...environment.obstacleText, 175);
-    text("障害物", obstacle.x * scaleX, obstacle.y * scaleY);
+    fill(...environment.obstacleText, isPreview ? 230 : 175);
+    text(isPreview ? "離して配置" : "障害物", obstacle.x * scaleX, obstacle.y * scaleY);
   }
 
+  drawingContext.setLineDash([]);
   pop();
 }
 
@@ -1151,7 +1248,7 @@ function clamp(value, minimum, maximum) {
   return Math.max(minimum, Math.min(maximum, value));
 }
 
-function beginFoodInteraction(canvasX, canvasY) {
+function beginInteraction(canvasX, canvasY) {
   if (canvasX < 0 || canvasY < 0 || canvasX >= width || canvasY >= height) {
     return true;
   }
@@ -1161,20 +1258,34 @@ function beginFoodInteraction(canvasX, canvasY) {
   draggedFood = findFoodAt(gridX, gridY);
   didDragFood = false;
   dragSnapshot = null;
-  if (!draggedFood) {
-    return true;
-  }
+  draggedObstacle = null;
+  didDragObstacle = false;
+  obstacleDragSnapshot = null;
 
-  dragSnapshot = {
-    x: draggedFood.x,
-    y: draggedFood.y,
-    nutrition: draggedFood.nutrition,
-    engulfment: draggedFood.engulfment,
-    activation: draggedFood.activation,
-    recovery: draggedFood.recovery,
-  };
-  draggedFood.isPlaced = false;
-  draggedFood.activation = 0;
+  if (draggedFood) {
+    dragSnapshot = {
+      x: draggedFood.x,
+      y: draggedFood.y,
+      nutrition: draggedFood.nutrition,
+      engulfment: draggedFood.engulfment,
+      activation: draggedFood.activation,
+      recovery: draggedFood.recovery,
+    };
+    draggedFood.isPlaced = false;
+    draggedFood.activation = 0;
+  } else {
+    draggedObstacle = findObstacleAt(gridX, gridY);
+    if (!draggedObstacle) {
+      return true;
+    }
+
+    obstacleDragSnapshot = {
+      x: draggedObstacle.x,
+      y: draggedObstacle.y,
+    };
+    draggedObstacle.isPlaced = false;
+    buildObstacleMask();
+  }
 
   if (isPaused) {
     redraw();
@@ -1192,28 +1303,63 @@ function findFoodAt(x, y) {
   return null;
 }
 
+function findObstacleAt(x, y) {
+  for (let i = obstacles.length - 1; i >= 0; i -= 1) {
+    const obstacle = obstacles[i];
+    if (obstacle.isPlaced && isPointInsideObstacle(x, y, obstacle, 1.5)) {
+      return obstacle;
+    }
+  }
+  return null;
+}
+
 function updateInteractionCursor() {
-  if (draggedFood) {
+  if (draggedFood || draggedObstacle) {
     cursor("grabbing");
     return;
   }
 
   const gridX = (mouseX / width) * gridWidth;
   const gridY = (mouseY / height) * gridHeight;
-  cursor(findFoodAt(gridX, gridY) ? "grab" : "default");
+  cursor(
+    findFoodAt(gridX, gridY) || findObstacleAt(gridX, gridY)
+      ? "grab"
+      : "default",
+  );
 }
 
-function moveDraggedFood(canvasX, canvasY) {
-  if (!draggedFood) {
+function moveDraggedInteraction(canvasX, canvasY) {
+  if (!draggedFood && !draggedObstacle) {
     return true;
   }
 
-  const nextX = clamp((canvasX / width) * gridWidth, 5, gridWidth - 5);
-  const nextY = clamp((canvasY / height) * gridHeight, 5, gridHeight - 5);
-  if (Math.hypot(nextX - draggedFood.x, nextY - draggedFood.y) > 0.03) {
-    draggedFood.x = nextX;
-    draggedFood.y = nextY;
-    didDragFood = true;
+  if (draggedFood) {
+    const nextX = clamp((canvasX / width) * gridWidth, 5, gridWidth - 5);
+    const nextY = clamp((canvasY / height) * gridHeight, 5, gridHeight - 5);
+    if (Math.hypot(nextX - draggedFood.x, nextY - draggedFood.y) > 0.03) {
+      draggedFood.x = nextX;
+      draggedFood.y = nextY;
+      didDragFood = true;
+    }
+  } else {
+    const cosRotation = Math.abs(Math.cos(draggedObstacle.rotation));
+    const sinRotation = Math.abs(Math.sin(draggedObstacle.rotation));
+    const extentX = (
+      draggedObstacle.radiusX * cosRotation
+      + draggedObstacle.radiusY * sinRotation
+    ) * 1.2;
+    const extentY = (
+      draggedObstacle.radiusX * sinRotation
+      + draggedObstacle.radiusY * cosRotation
+    ) * 1.2;
+    const nextX = clamp((canvasX / width) * gridWidth, extentX + 1, gridWidth - extentX - 1);
+    const nextY = clamp((canvasY / height) * gridHeight, extentY + 1, gridHeight - extentY - 1);
+
+    if (Math.hypot(nextX - draggedObstacle.x, nextY - draggedObstacle.y) > 0.03) {
+      draggedObstacle.x = nextX;
+      draggedObstacle.y = nextY;
+      didDragObstacle = true;
+    }
   }
 
   if (isPaused) {
@@ -1222,25 +1368,37 @@ function moveDraggedFood(canvasX, canvasY) {
   return false;
 }
 
-function endFoodInteraction() {
-  if (!draggedFood) {
+function endInteraction() {
+  if (!draggedFood && !draggedObstacle) {
     return true;
   }
 
-  if (didDragFood) {
-    draggedFood.isPlaced = true;
-    draggedFood.nutrition = 1;
-    draggedFood.engulfment = 0;
-    draggedFood.activation = 1;
-    draggedFood.recovery = 0;
-  } else if (dragSnapshot) {
-    Object.assign(draggedFood, dragSnapshot, { isPlaced: true });
+  if (draggedFood) {
+    if (didDragFood) {
+      draggedFood.isPlaced = true;
+      draggedFood.nutrition = 1;
+      draggedFood.engulfment = 0;
+      draggedFood.activation = 1;
+      draggedFood.recovery = 0;
+    } else if (dragSnapshot) {
+      Object.assign(draggedFood, dragSnapshot, { isPlaced: true });
+    } else {
+      draggedFood.isPlaced = true;
+    }
+    draggedFood = null;
+    didDragFood = false;
+    dragSnapshot = null;
   } else {
-    draggedFood.isPlaced = true;
+    if (!didDragObstacle && obstacleDragSnapshot) {
+      Object.assign(draggedObstacle, obstacleDragSnapshot);
+    }
+    draggedObstacle.isPlaced = true;
+    buildObstacleMask();
+    reconcileOrganismWithObstacles();
+    draggedObstacle = null;
+    didDragObstacle = false;
+    obstacleDragSnapshot = null;
   }
-  draggedFood = null;
-  didDragFood = false;
-  dragSnapshot = null;
 
   if (isPaused) {
     redraw();
@@ -1249,27 +1407,27 @@ function endFoodInteraction() {
 }
 
 function mousePressed() {
-  return beginFoodInteraction(mouseX, mouseY);
+  return beginInteraction(mouseX, mouseY);
 }
 
 function mouseDragged() {
-  return moveDraggedFood(mouseX, mouseY);
+  return moveDraggedInteraction(mouseX, mouseY);
 }
 
 function mouseReleased() {
-  return endFoodInteraction();
+  return endInteraction();
 }
 
 function touchStarted() {
-  return beginFoodInteraction(mouseX, mouseY);
+  return beginInteraction(mouseX, mouseY);
 }
 
 function touchMoved() {
-  return moveDraggedFood(mouseX, mouseY);
+  return moveDraggedInteraction(mouseX, mouseY);
 }
 
 function touchEnded() {
-  return endFoodInteraction();
+  return endInteraction();
 }
 
 function keyPressed() {
