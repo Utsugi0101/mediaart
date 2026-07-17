@@ -43,6 +43,7 @@ let generationSeed = 0;
 let isPaused = false;
 let draggedFood = null;
 let didDragFood = false;
+let dragSnapshot = null;
 let nextFoodId = 1;
 
 function setup() {
@@ -117,6 +118,7 @@ function regenerate() {
   speedAccumulator = 0;
   draggedFood = null;
   didDragFood = false;
+  dragSnapshot = null;
   nextFoodId = 1;
 
   initializeGrid();
@@ -193,6 +195,7 @@ function createFood(x, y) {
     activation: 0,
     recovery: 0,
     pulsePhase: random(TWO_PI),
+    isPlaced: true,
   };
 }
 
@@ -390,6 +393,10 @@ function getFoodSignal(x, y) {
   let signal = 0;
 
   for (const food of foods) {
+    if (!food.isPlaced) {
+      continue;
+    }
+
     const distance = Math.hypot(food.x - x, food.y - y);
     const range = shortestSide * (0.54 + food.nutrition * 0.08);
     const gradient = clamp(1 - distance / range, 0, 1);
@@ -443,6 +450,10 @@ function diffuseFields(elapsedSteps) {
 
 function updateFoods(elapsedSteps) {
   for (const food of foods) {
+    if (!food.isPlaced) {
+      continue;
+    }
+
     const coverage = measureFoodCoverage(food);
     food.engulfment += (coverage - food.engulfment) * 0.17;
     food.activation = Math.max(0, food.activation - 0.0025 * elapsedSteps);
@@ -484,7 +495,10 @@ function remodelPopulation() {
     return;
   }
 
-  const averageNutrition = foods.reduce((sum, food) => sum + food.nutrition, 0) / foods.length;
+  const placedFoods = foods.filter((food) => food.isPlaced);
+  const averageNutrition = placedFoods.length > 0
+    ? placedFoods.reduce((sum, food) => sum + food.nutrition, 0) / placedFoods.length
+    : 0;
   const desiredCount = Math.round(baseParticleTarget * (0.68 + averageNutrition * 0.28));
   const adjustment = clamp(Math.ceil(Math.abs(desiredCount - particles.length) * 0.03), 0, 12);
 
@@ -668,6 +682,19 @@ function renderFoods() {
     const markerRadius = food.radius * Math.min(scaleX, scaleY) * pulse;
     const nourishment = 0.55 + food.nutrition * 0.45;
 
+    if (!food.isPlaced) {
+      noFill();
+      stroke(...COLORS.food, 105);
+      strokeWeight(1.5);
+      circle(x, y, markerRadius * 2.7);
+      line(x - markerRadius * 0.45, y, x + markerRadius * 0.45, y);
+      line(x, y - markerRadius * 0.45, x, y + markerRadius * 0.45);
+      noStroke();
+      fill(...COLORS.food, 180);
+      text("離して配置", x, y - markerRadius * 1.65);
+      continue;
+    }
+
     noFill();
     stroke(...COLORS.food, isDragging ? 155 : 62);
     strokeWeight(isDragging ? 2 : 1);
@@ -768,9 +795,21 @@ function beginFoodInteraction(canvasX, canvasY) {
   const gridY = (canvasY / height) * gridHeight;
   draggedFood = findFoodAt(gridX, gridY);
   didDragFood = false;
+  dragSnapshot = null;
   if (!draggedFood) {
     return true;
   }
+
+  dragSnapshot = {
+    x: draggedFood.x,
+    y: draggedFood.y,
+    nutrition: draggedFood.nutrition,
+    engulfment: draggedFood.engulfment,
+    activation: draggedFood.activation,
+    recovery: draggedFood.recovery,
+  };
+  draggedFood.isPlaced = false;
+  draggedFood.activation = 0;
 
   if (isPaused) {
     redraw();
@@ -781,7 +820,7 @@ function beginFoodInteraction(canvasX, canvasY) {
 function findFoodAt(x, y) {
   for (let i = foods.length - 1; i >= 0; i -= 1) {
     const food = foods[i];
-    if (Math.hypot(food.x - x, food.y - y) <= food.radius * 2.35) {
+    if (food.isPlaced && Math.hypot(food.x - x, food.y - y) <= food.radius * 2.35) {
       return food;
     }
   }
@@ -809,10 +848,6 @@ function moveDraggedFood(canvasX, canvasY) {
   if (Math.hypot(nextX - draggedFood.x, nextY - draggedFood.y) > 0.03) {
     draggedFood.x = nextX;
     draggedFood.y = nextY;
-    draggedFood.nutrition = 1;
-    draggedFood.engulfment = 0;
-    draggedFood.activation = 1;
-    draggedFood.recovery = 0;
     didDragFood = true;
   }
 
@@ -828,10 +863,19 @@ function endFoodInteraction() {
   }
 
   if (didDragFood) {
+    draggedFood.isPlaced = true;
+    draggedFood.nutrition = 1;
+    draggedFood.engulfment = 0;
     draggedFood.activation = 1;
+    draggedFood.recovery = 0;
+  } else if (dragSnapshot) {
+    Object.assign(draggedFood, dragSnapshot, { isPlaced: true });
+  } else {
+    draggedFood.isPlaced = true;
   }
   draggedFood = null;
   didDragFood = false;
+  dragSnapshot = null;
 
   if (isPaused) {
     redraw();
