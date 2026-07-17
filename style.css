@@ -13,6 +13,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 html,
 body,
 #artwork {
@@ -31,6 +35,170 @@ body,
 #artwork {
   display: grid;
   place-items: center;
+}
+
+.experience-start {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(8 6 3 / 72%);
+  backdrop-filter: blur(7px) saturate(72%);
+  transition: opacity 480ms ease, visibility 480ms ease;
+}
+
+.experience-start.is-dismissed {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.experience-start__panel {
+  position: relative;
+  width: min(100%, 440px);
+  padding: 34px 26px 24px;
+  border-block: 1px solid var(--line);
+  color: var(--ink);
+  text-align: center;
+}
+
+.experience-start__panel::before,
+.experience-start__panel::after {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  content: "";
+  pointer-events: none;
+}
+
+.experience-start__panel::before {
+  top: -1px;
+  left: 0;
+  border-top: 1px solid var(--accent);
+  border-left: 1px solid var(--accent);
+}
+
+.experience-start__panel::after {
+  right: 0;
+  bottom: -1px;
+  border-right: 1px solid var(--accent);
+  border-bottom: 1px solid var(--accent);
+}
+
+.experience-start__eyebrow {
+  margin: 0 0 17px;
+  color: var(--accent);
+  font: 10px/1.4 system-ui, sans-serif;
+  letter-spacing: 0.22em;
+}
+
+.experience-start h1 {
+  margin: 0;
+  color: #fff3b0;
+  font: 600 clamp(38px, 12vw, 58px)/1 "Hiragino Mincho ProN", "Yu Mincho", serif;
+  letter-spacing: 0.12em;
+  text-indent: 0.12em;
+}
+
+.experience-start__description {
+  max-width: 34em;
+  margin: 24px auto 0;
+  color: rgb(247 237 206 / 74%);
+  font: 16px/1.9 "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
+}
+
+.experience-start__actions {
+  display: grid;
+  gap: 6px;
+  margin-top: 30px;
+}
+
+.experience-start__actions button {
+  min-height: 48px;
+  border-radius: 2px;
+  font: 600 14px/1 system-ui, sans-serif;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+#experience-start-fullscreen {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1px solid #f3ce4b;
+  background: #d9ad16;
+  color: #1b1303;
+}
+
+#experience-start-fullscreen:hover,
+#experience-start-fullscreen:focus-visible {
+  border-color: #fff0a0;
+  background: #edc532;
+  outline: 2px solid rgb(255 240 160 / 38%);
+  outline-offset: 3px;
+}
+
+#experience-start-windowed {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+#experience-start-windowed:hover,
+#experience-start-windowed:focus-visible {
+  color: var(--ink);
+  outline: 1px solid var(--line);
+  outline-offset: -4px;
+}
+
+.experience-start__note {
+  margin: 17px 0 0;
+  color: rgb(181 165 118 / 58%);
+  font: 11px/1.4 system-ui, sans-serif;
+}
+
+.fullscreen-control {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 11;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 92px;
+  min-height: 44px;
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel);
+  color: var(--muted);
+  font: 11px/1 system-ui, sans-serif;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition: border-color 180ms ease, color 180ms ease, opacity 300ms ease;
+}
+
+.fullscreen-control__icon {
+  color: var(--accent);
+  font-size: 17px;
+}
+
+.fullscreen-control:hover,
+.fullscreen-control:focus-visible {
+  border-color: var(--line-strong);
+  color: var(--ink);
+  outline: none;
+}
+
+body.is-awaiting-start > .fullscreen-control,
+body.is-awaiting-start > .environment-control,
+body.is-awaiting-start > .interaction-hint,
+body.is-awaiting-start > .speed-control {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .interaction-hint {
@@ -162,6 +330,15 @@ canvas {
 }
 
 @media (min-width: 640px) {
+  .experience-start__panel {
+    padding: 46px 42px 28px;
+  }
+
+  .fullscreen-control {
+    top: 16px;
+    left: 16px;
+  }
+
   .interaction-hint {
     left: 16px;
     bottom: 16px;
@@ -190,6 +367,8 @@ canvas {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .experience-start,
+  .fullscreen-control,
   .environment-control,
   .environment-control__icon {
     transition: none;

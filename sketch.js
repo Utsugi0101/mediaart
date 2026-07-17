@@ -86,6 +86,7 @@ let speedAccumulator = 0;
 let growthSpeedMultiplier = 20;
 let generationSeed = 0;
 let isPaused = false;
+let isExperienceStarted = false;
 let draggedFood = null;
 let didDragFood = false;
 let dragSnapshot = null;
@@ -103,9 +104,98 @@ function setup() {
 
   noSmooth();
   frameRate(TARGET_FPS);
+  setupFullscreenControls();
   setupSpeedControls();
   setupEnvironmentControl();
   regenerate();
+}
+
+function setupFullscreenControls() {
+  const overlay = document.getElementById("experience-start");
+  const fullscreenStart = document.getElementById("experience-start-fullscreen");
+  const windowedStart = document.getElementById("experience-start-windowed");
+  const fullscreenToggle = document.getElementById("fullscreen-toggle");
+
+  if (!overlay || !fullscreenStart || !windowedStart) {
+    isExperienceStarted = true;
+    document.body.classList.remove("is-awaiting-start");
+    return;
+  }
+
+  const beginExperience = async (useFullscreen) => {
+    fullscreenStart.disabled = true;
+    windowedStart.disabled = true;
+
+    if (useFullscreen) {
+      await enterAppFullscreen();
+    }
+
+    isExperienceStarted = true;
+    fullscreenStart.blur();
+    windowedStart.blur();
+    document.body.classList.remove("is-awaiting-start");
+    overlay.classList.add("is-dismissed");
+    overlay.setAttribute("aria-hidden", "true");
+    overlay.inert = true;
+  };
+
+  fullscreenStart.addEventListener("click", () => beginExperience(true));
+  windowedStart.addEventListener("click", () => beginExperience(false));
+
+  if (fullscreenToggle) {
+    fullscreenToggle.addEventListener("click", toggleAppFullscreen);
+  }
+
+  document.addEventListener("fullscreenchange", updateFullscreenControl);
+  updateFullscreenControl();
+
+  if (!document.fullscreenEnabled || !document.documentElement.requestFullscreen) {
+    fullscreenStart.hidden = true;
+    windowedStart.textContent = "体験を始める";
+    if (fullscreenToggle) {
+      fullscreenToggle.hidden = true;
+    }
+  }
+}
+
+async function enterAppFullscreen() {
+  if (!document.fullscreenEnabled || document.fullscreenElement) {
+    return;
+  }
+
+  try {
+    await document.documentElement.requestFullscreen({ navigationUI: "hide" });
+  } catch (error) {
+    console.warn("Fullscreen request was rejected:", error);
+  }
+}
+
+async function toggleAppFullscreen() {
+  try {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen();
+    } else {
+      await enterAppFullscreen();
+    }
+  } catch (error) {
+    console.warn("Fullscreen toggle failed:", error);
+  }
+}
+
+function updateFullscreenControl() {
+  const fullscreenToggle = document.getElementById("fullscreen-toggle");
+  const fullscreenLabel = document.getElementById("fullscreen-label");
+  if (!fullscreenToggle || !fullscreenLabel) {
+    return;
+  }
+
+  const isFullscreen = Boolean(document.fullscreenElement);
+  fullscreenLabel.textContent = isFullscreen ? "解除" : "全画面";
+  fullscreenToggle.setAttribute(
+    "aria-label",
+    isFullscreen ? "全画面を終了する" : "全画面にする",
+  );
+  fullscreenToggle.setAttribute("aria-pressed", String(isFullscreen));
 }
 
 function setupSpeedControls() {
@@ -163,7 +253,7 @@ function prefersReducedMotion() {
 }
 
 function draw() {
-  if (!isPaused) {
+  if (isExperienceStarted && !isPaused) {
     speedAccumulator += growthSpeedMultiplier;
     const steps = Math.floor(speedAccumulator);
     speedAccumulator -= steps;
@@ -1431,6 +1521,10 @@ function touchEnded() {
 }
 
 function keyPressed() {
+  if (!isExperienceStarted) {
+    return true;
+  }
+
   if (key === "r" || key === "R") {
     regenerate();
     return false;
@@ -1457,7 +1551,13 @@ function keyPressed() {
 
 function windowResized() {
   const size = getFittedCanvasSize();
-  resizeCanvas(size.width, size.height);
+  resizeCanvas(size.width, size.height, true);
   noSmooth();
-  regenerate();
+
+  if (!cellImage) {
+    regenerate();
+  } else {
+    renderSimulation();
+    updateInteractionCursor();
+  }
 }

@@ -4,10 +4,44 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>モジホコリ</title>
-    <link rel="stylesheet" href="style.css?v=20260717-8" />
+    <link rel="stylesheet" href="style.css?v=20260717-10" />
   </head>
-  <body>
+  <body class="is-awaiting-start">
     <main id="artwork"></main>
+    <section
+      id="experience-start"
+      class="experience-start"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="experience-title"
+      aria-describedby="experience-description"
+    >
+      <div class="experience-start__panel">
+        <p class="experience-start__eyebrow">PHYSARUM OBSERVATION</p>
+        <h1 id="experience-title">モジホコリ</h1>
+        <p id="experience-description" class="experience-start__description">
+          餌と障害物を動かして、環境に応じて変わり続ける形を観察します。
+        </p>
+        <div class="experience-start__actions">
+          <button id="experience-start-fullscreen" type="button" autofocus>
+            <span aria-hidden="true">⛶</span>
+            全画面で始める
+          </button>
+          <button id="experience-start-windowed" type="button">そのまま見る</button>
+        </div>
+        <p class="experience-start__note">Escキーで全画面を終了できます</p>
+      </div>
+    </section>
+    <button
+      id="fullscreen-toggle"
+      class="fullscreen-control"
+      type="button"
+      aria-label="全画面にする"
+      aria-pressed="false"
+    >
+      <span class="fullscreen-control__icon" aria-hidden="true">⛶</span>
+      <span id="fullscreen-label">全画面</span>
+    </button>
     <p class="interaction-hint">餌と障害物はドラッグで移動できます</p>
     <button
       id="environment-toggle"
@@ -29,6 +63,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/p5@1.9.4/lib/p5.min.js"></script>
-    <script src="sketch.js?v=20260717-9"></script>
+    <script src="sketch.js?v=20260717-10"></script>
   </body>
 </html>
