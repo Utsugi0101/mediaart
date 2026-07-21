@@ -1,0 +1,30 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8765,
+    "broadcastHz": 10
+  },
+  "source": "mock",
+  "tracking": {
+    "smoothingAlpha": 0.35,
+    "deadzone": 0.0025,
+    "movingThreshold": 0.006,
+    "missingGraceSeconds": 0.5,
+    "confirmationFrames": 2
+  },
+  "camera": {
+    "index": 0,
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "screenCorners": null
+  },
+  "model": {
+    "path": "models/best.pt",
+    "confidence": 0.45,
+    "iou": 0.5,
+    "imageSize": 640,
+    "device": "mps",
+    "allowedClasses": ["food", "obstacle"]
+  }
+}

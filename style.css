@@ -37,6 +37,26 @@ body,
   place-items: center;
 }
 
+html.is-exhibit-mode,
+html.is-exhibit-mode body,
+body.is-exhibit-mode,
+body.is-exhibit-mode canvas {
+  cursor: none !important;
+}
+
+html.is-exhibit-mode .experience-start,
+html.is-exhibit-mode .fullscreen-control,
+html.is-exhibit-mode .interaction-hint,
+html.is-exhibit-mode .environment-control,
+html.is-exhibit-mode .speed-control,
+body.is-exhibit-mode > .experience-start,
+body.is-exhibit-mode > .fullscreen-control,
+body.is-exhibit-mode > .interaction-hint,
+body.is-exhibit-mode > .environment-control,
+body.is-exhibit-mode > .speed-control {
+  display: none !important;
+}
+
 .experience-start {
   position: fixed;
   inset: 0;

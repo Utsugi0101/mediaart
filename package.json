@@ -1,0 +1,13 @@
+{
+  "name": "mojihokori",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Physical-object-driven Physarum-inspired media art installation",
+  "scripts": {
+    "test": "node --test tests/js/*.test.js",
+    "check": "node --check tracking.js && node --check state-store.js && node --check sketch.js"
+  },
+  "dependencies": {
+    "p5": "1.9.4"
+  }
+}

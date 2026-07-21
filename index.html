@@ -4,7 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>モジホコリ</title>
-    <link rel="stylesheet" href="style.css?v=20260717-10" />
+    <script>
+      if (new URLSearchParams(location.search).get("mode") === "exhibit") {
+        document.documentElement.classList.add("is-exhibit-mode");
+      }
+    </script>
+    <link rel="stylesheet" href="style.css?v=20260717-11" />
   </head>
   <body class="is-awaiting-start">
     <main id="artwork"></main>
@@ -62,7 +67,12 @@
       <button type="button" data-speed="100">100×</button>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/p5@1.9.4/lib/p5.min.js"></script>
-    <script src="sketch.js?v=20260717-10"></script>
+    <script src="tracking.js?v=20260717-11"></script>
+    <script src="state-store.js?v=20260717-11"></script>
+    <script
+      src="p5.min.js"
+      onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/p5@1.9.4/lib/p5.min.js'"
+    ></script>
+    <script src="sketch.js?v=20260717-11"></script>
   </body>
 </html>

@@ -6,6 +6,12 @@ const TARGET_FPS = 30;
 const INITIAL_FOOD_COUNT = 2;
 const INITIAL_OBSTACLE_COUNT = 3;
 const PALETTE_STEPS = 48;
+const STATE_VERSION = 1;
+const STATE_SAVE_INTERVAL_MS = 30_000;
+
+const APP_PARAMETERS = new URLSearchParams(window.location.search);
+const IS_EXHIBIT_MODE = APP_PARAMETERS.get("mode") === "exhibit";
+const TRACKING_INPUT_ENABLED = IS_EXHIBIT_MODE || APP_PARAMETERS.get("input") === "tracking";
 
 const SENSOR_OFFSET = 6;
 const SENSOR_ANGLE = Math.PI / 4;
@@ -94,9 +100,22 @@ let draggedObstacle = null;
 let didDragObstacle = false;
 let obstacleDragSnapshot = null;
 let nextFoodId = 1;
+let trackingClient = null;
+let trackingStatus = "disabled";
+let latestTrackingSequence = -1;
+let dormancyLevel = 0;
+let dailyStateStore = null;
+let stateSaveTimer = null;
+let isStateRestoreComplete = false;
 
 function setup() {
   pixelDensity(1);
+
+  document.body.classList.toggle("is-exhibit-mode", IS_EXHIBIT_MODE);
+  if (IS_EXHIBIT_MODE) {
+    document.body.classList.remove("is-awaiting-start");
+    isExperienceStarted = true;
+  }
 
   const size = getFittedCanvasSize();
   const canvas = createCanvas(size.width, size.height);
@@ -108,6 +127,7 @@ function setup() {
   setupSpeedControls();
   setupEnvironmentControl();
   regenerate();
+  setupDailyStatePersistence().finally(setupTrackingInput);
 }
 
 function setupFullscreenControls() {
@@ -115,6 +135,17 @@ function setupFullscreenControls() {
   const fullscreenStart = document.getElementById("experience-start-fullscreen");
   const windowedStart = document.getElementById("experience-start-windowed");
   const fullscreenToggle = document.getElementById("fullscreen-toggle");
+
+  if (IS_EXHIBIT_MODE) {
+    isExperienceStarted = true;
+    document.body.classList.remove("is-awaiting-start");
+    if (overlay) {
+      overlay.classList.add("is-dismissed");
+      overlay.setAttribute("aria-hidden", "true");
+      overlay.inert = true;
+    }
+    return;
+  }
 
   if (!overlay || !fullscreenStart || !windowedStart) {
     isExperienceStarted = true;
@@ -252,6 +283,264 @@ function prefersReducedMotion() {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
+function setupTrackingInput() {
+  if (!TRACKING_INPUT_ENABLED || trackingClient || !window.MojihokoriTracking) {
+    return;
+  }
+
+  trackingClient = new window.MojihokoriTracking.TrackingClient({
+    onFrame: applyTrackingFrame,
+    onStatus: (status) => {
+      if (status.state === "connected") {
+        // The tracking server may have restarted its sequence at zero.
+        latestTrackingSequence = -1;
+      }
+      if (trackingStatus !== status.state) {
+        trackingStatus = status.state;
+        console.info("Tracking connection:", status.state);
+      }
+    },
+  });
+  trackingClient.connect();
+}
+
+function applyTrackingFrame(frame) {
+  if (!TRACKING_INPUT_ENABLED || !gridWidth || frame.sequence <= latestTrackingSequence) {
+    return;
+  }
+  latestTrackingSequence = frame.sequence;
+  trackingStatus = frame.camera === "ok" ? "receiving" : "camera-lost";
+
+  const previousFoods = new Map(foods.map((food) => [String(food.id), food]));
+  const previousObstacles = new Map(obstacles.map((obstacle) => [String(obstacle.id), obstacle]));
+  const nextFoods = [];
+  const nextObstacles = [];
+
+  for (const tracked of frame.objects) {
+    if (tracked.kind === "food") {
+      const x = clamp(tracked.x * gridWidth, 1, gridWidth - 2);
+      const y = clamp(tracked.y * gridHeight, 1, gridHeight - 2);
+      const existing = previousFoods.get(tracked.id);
+      const food = existing || createFood(x, y, tracked.id);
+      const stoppedMoving = Boolean(food.trackedMoving) && !tracked.moving;
+      food.x = x;
+      food.y = y;
+      food.isPlaced = true;
+      food.trackedMoving = tracked.moving;
+      if (tracked.contour.length >= 3) {
+        const contour = tracked.contour.map((point) => [
+          point[0] * gridWidth,
+          point[1] * gridHeight,
+        ]);
+        food.radius = Math.max(3, getContourRadius(contour, x, y));
+      }
+      if (stoppedMoving) {
+        replenishFood(food);
+      }
+      nextFoods.push(food);
+      continue;
+    }
+
+    const obstacle = createTrackedObstacle(tracked, previousObstacles.get(tracked.id));
+    nextObstacles.push(obstacle);
+  }
+
+  const obstacleGeometryChanged = haveObstacleGeometriesChanged(obstacles, nextObstacles);
+  foods = nextFoods;
+  obstacles = nextObstacles;
+  if (obstacleGeometryChanged) {
+    buildObstacleMask();
+    reconcileOrganismWithObstacles();
+  }
+
+  if (isPaused) {
+    redraw();
+  }
+}
+
+function replenishFood(food) {
+  food.nutrition = 1;
+  food.engulfment = 0;
+  food.activation = 1;
+  food.recovery = 0;
+}
+
+function getContourRadius(contour, centerX, centerY) {
+  if (!contour.length) {
+    return Math.min(gridWidth, gridHeight) * 0.025;
+  }
+  const distances = contour.map((point) => Math.hypot(point[0] - centerX, point[1] - centerY));
+  return distances.reduce((sum, distance) => sum + distance, 0) / distances.length;
+}
+
+function createTrackedObstacle(tracked, existing) {
+  const x = clamp(tracked.x * gridWidth, 1, gridWidth - 2);
+  const y = clamp(tracked.y * gridHeight, 1, gridHeight - 2);
+  const contour = tracked.contour.length >= 3
+    ? tracked.contour.map((point) => [
+      clamp(point[0] * gridWidth, 0, gridWidth - 1),
+      clamp(point[1] * gridHeight, 0, gridHeight - 1),
+    ])
+    : [];
+  const extentX = contour.length
+    ? Math.max(...contour.map((point) => Math.abs(point[0] - x)))
+    : Math.min(gridWidth, gridHeight) * 0.075;
+  const extentY = contour.length
+    ? Math.max(...contour.map((point) => Math.abs(point[1] - y)))
+    : Math.min(gridWidth, gridHeight) * 0.055;
+  return {
+    id: tracked.id,
+    x,
+    y,
+    radiusX: Math.max(3, extentX),
+    radiusY: Math.max(3, extentY),
+    rotation: existing ? existing.rotation : 0,
+    edgePhase: existing ? existing.edgePhase : random(TWO_PI),
+    contour,
+    isPlaced: true,
+    trackedMoving: tracked.moving,
+  };
+}
+
+function haveObstacleGeometriesChanged(previous, next) {
+  if (previous.length !== next.length) {
+    return true;
+  }
+  const previousById = new Map(previous.map((obstacle) => [String(obstacle.id), obstacle]));
+  for (const obstacle of next) {
+    const old = previousById.get(String(obstacle.id));
+    if (!old || Math.hypot(old.x - obstacle.x, old.y - obstacle.y) > 0.2) {
+      return true;
+    }
+    if ((old.contour || []).length !== obstacle.contour.length) {
+      return true;
+    }
+    for (let index = 0; index < obstacle.contour.length; index += 1) {
+      if (Math.hypot(
+        old.contour[index][0] - obstacle.contour[index][0],
+        old.contour[index][1] - obstacle.contour[index][1],
+      ) > 0.2) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+async function setupDailyStatePersistence() {
+  isStateRestoreComplete = false;
+  if (!IS_EXHIBIT_MODE || !window.MojihokoriState) {
+    isStateRestoreComplete = true;
+    return;
+  }
+
+  dailyStateStore = new window.MojihokoriState.DailyStateStore();
+  try {
+    if (APP_PARAMETERS.get("reset") === "1") {
+      await dailyStateStore.clear();
+      const cleanUrl = new URL(window.location.href);
+      cleanUrl.searchParams.delete("reset");
+      window.history.replaceState(null, "", cleanUrl);
+    } else {
+      const savedState = await dailyStateStore.load();
+      if (savedState) {
+        restoreSimulationState(savedState);
+        console.info("Restored exhibition state saved at", new Date(savedState.savedAt));
+      }
+    }
+    await dailyStateStore.pruneExcept();
+  } catch (error) {
+    console.warn("Daily state restoration is unavailable:", error);
+  } finally {
+    isStateRestoreComplete = true;
+    stateSaveTimer = window.setInterval(saveSimulationState, STATE_SAVE_INTERVAL_MS);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") {
+        saveSimulationState();
+      }
+    });
+  }
+}
+
+let stateSaveInProgress = false;
+
+async function saveSimulationState() {
+  if (!dailyStateStore || !isStateRestoreComplete || stateSaveInProgress || !trailField) {
+    return;
+  }
+  stateSaveInProgress = true;
+  try {
+    await dailyStateStore.save({
+      version: STATE_VERSION,
+      gridWidth,
+      gridHeight,
+      generationSeed,
+      simulationFrame,
+      speedAccumulator,
+      environmentIndex: 0,
+      dormancyLevel,
+      trailField: trailField.slice(),
+      tubeField: tubeField.slice(),
+      occupancy: occupancy.slice(),
+      obstacleMask: obstacleMask.slice(),
+      particles: particles.map((particle) => ({ ...particle })),
+      foods: foods.map((food) => ({ ...food })),
+      obstacles: obstacles.map((obstacle) => ({
+        ...obstacle,
+        contour: (obstacle.contour || []).map((point) => [...point]),
+      })),
+    });
+  } catch (error) {
+    console.warn("Daily state save failed:", error);
+  } finally {
+    stateSaveInProgress = false;
+  }
+}
+
+function restoreSimulationState(saved) {
+  const expectedLength = gridWidth * gridHeight;
+  if (
+    saved.version !== STATE_VERSION
+    || saved.gridWidth !== gridWidth
+    || saved.gridHeight !== gridHeight
+    || !saved.trailField
+    || saved.trailField.length !== expectedLength
+    || !saved.tubeField
+    || saved.tubeField.length !== expectedLength
+    || !saved.occupancy
+    || saved.occupancy.length !== expectedLength
+    || !saved.obstacleMask
+    || saved.obstacleMask.length !== expectedLength
+  ) {
+    console.warn("Saved exhibition state is incompatible with the current canvas and was ignored");
+    return false;
+  }
+
+  generationSeed = Number(saved.generationSeed) || generationSeed;
+  simulationFrame = Number(saved.simulationFrame) || 0;
+  speedAccumulator = Number(saved.speedAccumulator) || 0;
+  environmentIndex = 0;
+  dormancyLevel = clamp(Number(saved.dormancyLevel) || 0, 0, 1);
+  trailField = new Float32Array(saved.trailField);
+  nextTrailField = trailField.slice();
+  tubeField = new Float32Array(saved.tubeField);
+  nextTubeField = tubeField.slice();
+  occupancy = new Uint8Array(saved.occupancy);
+  obstacleMask = new Uint8Array(saved.obstacleMask);
+  particles = Array.isArray(saved.particles) ? saved.particles : particles;
+  foods = Array.isArray(saved.foods) ? saved.foods : [];
+  obstacles = Array.isArray(saved.obstacles) ? saved.obstacles : [];
+  nextFoodId = foods.reduce(
+    (maximum, food) => typeof food.id === "number" ? Math.max(maximum, food.id + 1) : maximum,
+    1,
+  );
+  randomSeed(generationSeed);
+  noiseSeed(generationSeed);
+  palette = buildPalette();
+  buildEnvironmentImage(false);
+  return true;
+}
+
 function draw() {
   if (isExperienceStarted && !isPaused) {
     speedAccumulator += growthSpeedMultiplier;
@@ -299,11 +588,16 @@ function regenerate() {
   didDragObstacle = false;
   obstacleDragSnapshot = null;
   nextFoodId = 1;
+  dormancyLevel = 0;
 
   initializeGrid();
   buildEnvironmentImage(false);
-  initializeFoods();
-  initializeObstacles();
+  if (TRACKING_INPUT_ENABLED) {
+    buildObstacleMask();
+  } else {
+    initializeFoods();
+    initializeObstacles();
+  }
   initializeOrganism();
 
   for (let pass = 0; pass < 5; pass += 1) {
@@ -447,11 +741,11 @@ function initializeFoods() {
   }
 }
 
-function createFood(x, y) {
+function createFood(x, y, id = null) {
   const shortestSide = Math.min(gridWidth, gridHeight);
 
   return {
-    id: nextFoodId++,
+    id: id === null ? nextFoodId++ : String(id),
     x: clamp(x, 5, gridWidth - 5),
     y: clamp(y, 5, gridHeight - 5),
     radius: Math.max(5, shortestSide * 0.025),
@@ -461,6 +755,7 @@ function createFood(x, y) {
     recovery: 0,
     pulsePhase: random(TWO_PI),
     isPlaced: true,
+    trackedMoving: false,
   };
 }
 
@@ -633,6 +928,23 @@ function findNearestFreeCell(x, y, maxRadius) {
 }
 
 function isPointInsideObstacle(x, y, obstacle, padding = 0) {
+  if (obstacle.contour && obstacle.contour.length >= 3) {
+    if (window.MojihokoriTracking.isPointInPolygon(x, y, obstacle.contour)) {
+      return true;
+    }
+    if (padding <= 0) {
+      return false;
+    }
+    for (let index = 0; index < obstacle.contour.length; index += 1) {
+      const start = obstacle.contour[index];
+      const end = obstacle.contour[(index + 1) % obstacle.contour.length];
+      if (distanceToSegment(x, y, start[0], start[1], end[0], end[1]) <= padding) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   const dx = x - obstacle.x;
   const dy = y - obstacle.y;
   const cosRotation = Math.cos(obstacle.rotation);
@@ -647,6 +959,21 @@ function isPointInsideObstacle(x, y, obstacle, padding = 0) {
   const distance = Math.hypot(normalizedX, normalizedY);
 
   return distance <= getObstacleEdgeScale(angle, obstacle);
+}
+
+function distanceToSegment(x, y, x1, y1, x2, y2) {
+  const segmentX = x2 - x1;
+  const segmentY = y2 - y1;
+  const lengthSquared = segmentX * segmentX + segmentY * segmentY;
+  if (lengthSquared === 0) {
+    return Math.hypot(x - x1, y - y1);
+  }
+  const progress = clamp(
+    ((x - x1) * segmentX + (y - y1) * segmentY) / lengthSquared,
+    0,
+    1,
+  );
+  return Math.hypot(x - (x1 + segmentX * progress), y - (y1 + segmentY * progress));
 }
 
 function getObstacleEdgeScale(angle, obstacle) {
@@ -694,7 +1021,7 @@ function initializeOrganism() {
     }
 
     const food = getNearestFood(x, y);
-    const foodHeading = Math.atan2(food.y - y, food.x - x);
+    const foodHeading = food ? Math.atan2(food.y - y, food.x - x) : random(TWO_PI);
     if (!addParticle(x, y, foodHeading + random(-Math.PI * 0.85, Math.PI * 0.85))) {
       continue;
     }
@@ -720,9 +1047,9 @@ function chooseOrganismOrigin(shortestSide) {
       continue;
     }
 
-    const nearestDistance = Math.min(
-      ...foods.map((food) => Math.hypot(food.x - candidate.x, food.y - candidate.y)),
-    );
+    const nearestDistance = foods.length > 0
+      ? Math.min(...foods.map((food) => Math.hypot(food.x - candidate.x, food.y - candidate.y)))
+      : shortestSide * 0.3;
 
     if (nearestDistance > bestDistance) {
       best = candidate;
@@ -755,7 +1082,14 @@ function addParticle(x, y, heading) {
 
 function simulateStep() {
   simulationFrame += 1;
-  moveParticles();
+  const hasFood = foods.some((food) => food.isPlaced);
+  const dormancyTarget = hasFood ? 0 : 1;
+  const dormancyRate = hasFood ? 0.00022 : 0.00006;
+  dormancyLevel += (dormancyTarget - dormancyLevel) * dormancyRate;
+  const activity = 1 - dormancyLevel * 0.95;
+  if (Math.random() < activity) {
+    moveParticles();
+  }
 
   if (simulationFrame % DIFFUSION_INTERVAL === 0) {
     diffuseFields(DIFFUSION_INTERVAL);
@@ -974,7 +1308,10 @@ function remodelPopulation() {
   const averageNutrition = placedFoods.length > 0
     ? placedFoods.reduce((sum, food) => sum + food.nutrition, 0) / placedFoods.length
     : 0;
-  const desiredCount = Math.round(baseParticleTarget * (0.68 + averageNutrition * 0.28));
+  const desiredFactor = placedFoods.length > 0
+    ? 0.68 + averageNutrition * 0.28
+    : lerp(0.68, 0.38, dormancyLevel);
+  const desiredCount = Math.round(baseParticleTarget * desiredFactor);
   const adjustment = clamp(Math.ceil(Math.abs(desiredCount - particles.length) * 0.03), 0, 12);
 
   if (particles.length < desiredCount) {
@@ -1040,7 +1377,8 @@ function growAtProductiveEdge() {
 }
 
 function removeWeakParticle() {
-  if (particles.length <= Math.max(300, baseParticleTarget * 0.72)) {
+  const minimumRatio = lerp(0.72, 0.34, dormancyLevel);
+  if (particles.length <= Math.max(300, baseParticleTarget * minimumRatio)) {
     return false;
   }
 
@@ -1121,7 +1459,11 @@ function renderSimulation() {
       simulationFrame * 0.038 + x * 0.14 - y * 0.09,
     ) * 0.055;
     const brightness = clamp(
-      (1 - Math.exp(-material * 0.78)) * 1.25 * globalPulse * localPulse,
+      (1 - Math.exp(-material * 0.78))
+      * 1.25
+      * globalPulse
+      * localPulse
+      * (1 - dormancyLevel * 0.48),
       0,
       1,
     );
@@ -1137,8 +1479,10 @@ function renderSimulation() {
 
   cellImage.updatePixels();
   image(cellImage, 0, 0, width, height);
-  renderObstacles();
-  renderFoods();
+  if (!IS_EXHIBIT_MODE) {
+    renderObstacles();
+    renderFoods();
+  }
 }
 
 function renderEnvironment() {
@@ -1185,16 +1529,22 @@ function renderObstacles() {
     strokeWeight(isPreview ? 1.7 : 1.25);
     beginShape();
 
-    for (let step = 0; step < 48; step += 1) {
-      const angle = (TWO_PI * step) / 48;
-      const edgeScale = getObstacleEdgeScale(angle, obstacle);
-      const localX = Math.cos(angle) * obstacle.radiusX * edgeScale;
-      const localY = Math.sin(angle) * obstacle.radiusY * edgeScale;
-      const cosRotation = Math.cos(obstacle.rotation);
-      const sinRotation = Math.sin(obstacle.rotation);
-      const x = obstacle.x + localX * cosRotation - localY * sinRotation;
-      const y = obstacle.y + localX * sinRotation + localY * cosRotation;
-      vertex(x * scaleX, y * scaleY);
+    if (obstacle.contour && obstacle.contour.length >= 3) {
+      for (const point of obstacle.contour) {
+        vertex(point[0] * scaleX, point[1] * scaleY);
+      }
+    } else {
+      for (let step = 0; step < 48; step += 1) {
+        const angle = (TWO_PI * step) / 48;
+        const edgeScale = getObstacleEdgeScale(angle, obstacle);
+        const localX = Math.cos(angle) * obstacle.radiusX * edgeScale;
+        const localY = Math.sin(angle) * obstacle.radiusY * edgeScale;
+        const cosRotation = Math.cos(obstacle.rotation);
+        const sinRotation = Math.sin(obstacle.rotation);
+        const x = obstacle.x + localX * cosRotation - localY * sinRotation;
+        const y = obstacle.y + localX * sinRotation + localY * cosRotation;
+        vertex(x * scaleX, y * scaleY);
+      }
     }
 
     endShape(CLOSE);
@@ -1267,6 +1617,9 @@ function renderFoods() {
 }
 
 function getNearestFood(x, y) {
+  if (foods.length === 0) {
+    return null;
+  }
   let nearest = foods[0];
   let nearestDistance = squaredDistance(x, y, nearest.x, nearest.y);
 
@@ -1339,6 +1692,9 @@ function clamp(value, minimum, maximum) {
 }
 
 function beginInteraction(canvasX, canvasY) {
+  if (TRACKING_INPUT_ENABLED) {
+    return true;
+  }
   if (canvasX < 0 || canvasY < 0 || canvasX >= width || canvasY >= height) {
     return true;
   }
@@ -1404,6 +1760,14 @@ function findObstacleAt(x, y) {
 }
 
 function updateInteractionCursor() {
+  if (IS_EXHIBIT_MODE) {
+    cursor("none");
+    return;
+  }
+  if (TRACKING_INPUT_ENABLED) {
+    cursor("default");
+    return;
+  }
   if (draggedFood || draggedObstacle) {
     cursor("grabbing");
     return;

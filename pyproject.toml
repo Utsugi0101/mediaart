@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mojihokori-tracking"
+version = "0.1.0"
+description = "Local object-tracking server for the Mojihokori installation"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "aiohttp>=3.9,<4",
+]
+
+[project.optional-dependencies]
+vision = [
+  "opencv-python>=4.8,<5",
+  "ultralytics>=8.3,<9",
+]
+
+[project.scripts]
+mojihokori-server = "mojihokori_tracking.server:main"
+mojihokori-camera-probe = "mojihokori_tracking.camera_probe:main"
+mojihokori-capture = "mojihokori_tracking.capture:main"
+mojihokori-train = "mojihokori_tracking.train:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mojihokori_tracking"]
